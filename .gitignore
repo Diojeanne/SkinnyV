@@ -2,8 +2,7 @@
 node_modules/
 src-tauri/target/
 
-# Build output
-dist/
+# Build output (we commit dist/ for simplicity)
 
 # IDE
 .vscode/

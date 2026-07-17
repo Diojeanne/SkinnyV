@@ -4,8 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.diojeanne.skinnyv",
   "build": {
-    "frontendDist": "../dist",
-    "beforeBuildCommand": "npm run build"
+    "frontendDist": "../dist"
   },
   "app": {
     "windows": [
