@@ -82,7 +82,7 @@ impl AudioEngine {
             audio_thread(cmd_rx, app_handle);
         });
 
-        let (result_tx, result_rx) = unbounded::<Result<(), String>>();
+        let (result_tx, _result_rx) = unbounded::<Result<(), String>>();
 
         *self.cmd_tx.lock() = Some(cmd_tx.clone());
         *self.current_device.lock() = device_id.clone();
