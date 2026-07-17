@@ -4,7 +4,6 @@ use parking_lot::Mutex;
 
 const FFT_SIZE: usize = 2048;
 const NUM_BINS: usize = 128;
-const TARGET_SAMPLE_RATE: u32 = 48000;
 
 /// Represents an audio device we can capture from.
 #[derive(Clone, serde::Serialize)]
@@ -25,12 +24,14 @@ pub struct FrequencyData {
 
 /// Commands sent to the audio thread.
 enum AudioCommand {
-    Start { device_id: Option<String> },
+    Start {
+        device_id: Option<String>,
+        result_tx: Sender<Result<(), String>>,
+    },
     Stop,
 }
 
 /// AudioEngine is Send + Sync — it only owns channels, never the stream directly.
-/// The cpal::Stream lives on the audio thread.
 pub struct AudioEngine {
     cmd_tx: Mutex<Option<Sender<AudioCommand>>>,
     running: Mutex<bool>,
@@ -81,13 +82,30 @@ impl AudioEngine {
             audio_thread(cmd_rx, app_handle);
         });
 
+        let (result_tx, result_rx) = unbounded::<Result<(), String>>();
+
         *self.cmd_tx.lock() = Some(cmd_tx.clone());
         *self.current_device.lock() = device_id.clone();
-        cmd_tx.send(AudioCommand::Start { device_id }).ok();
+        cmd_tx
+            .send(AudioCommand::Start {
+                device_id,
+                result_tx: result_tx.clone(),
+            })
+            .ok();
 
-        *self.running.lock() = true;
-
-        Ok(())
+        // Wait for the audio thread to report success or failure
+        match result_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok(result) => {
+                if result.is_ok() {
+                    *self.running.lock() = true;
+                }
+                result
+            }
+            Err(_) => {
+                *self.running.lock() = false;
+                Err("Timed out waiting for audio capture to start".to_string())
+            }
+        }
     }
 
     pub fn stop(&self) {
@@ -114,6 +132,8 @@ fn audio_thread(
 ) {
     use cpal::SampleFormat;
     use realfft::RealFftPlanner;
+
+    println!("[SkinnyV] Audio thread started");
 
     let mut active_stream: Option<cpal::Stream> = None;
 
@@ -169,7 +189,7 @@ fn audio_thread(
                         continue;
                     }
 
-                    let bins = compute_bins(&spectrum, NUM_BINS, TARGET_SAMPLE_RATE);
+                    let bins = compute_bins(&spectrum, NUM_BINS);
 
                     let volume = bins.iter().sum::<f32>() / bins.len().max(1) as f32;
                     let peak = bins.iter().cloned().fold(0.0f32, f32::max);
@@ -197,40 +217,71 @@ fn audio_thread(
     // Process commands
     while let Ok(cmd) = cmd_rx.recv() {
         match cmd {
-            AudioCommand::Start { device_id } => {
+            AudioCommand::Start { device_id, result_tx } => {
+                println!("[SkinnyV] Starting capture, device: {:?}", device_id);
+
+                // Drop old stream
                 active_stream.take();
 
                 let host = cpal::default_host();
                 let device = match &device_id {
-                    Some(id) => host
-                        .output_devices()
-                        .ok()
-                        .and_then(|mut devs| devs.find(|d| d.name().map(|n| n == *id).unwrap_or(false))),
-                    None => host.default_output_device(),
+                    Some(id) => {
+                        println!("[SkinnyV] Looking for device: {}", id);
+                        match host.output_devices() {
+                            Ok(mut devs) => devs.find(|d| {
+                                d.name().map(|n| {
+                                    println!("[SkinnyV] Found device: {}", n);
+                                    n == *id
+                                }).unwrap_or(false)
+                            }),
+                            Err(e) => {
+                                let msg = format!("Failed to enumerate output devices: {}", e);
+                                println!("[SkinnyV] ERROR: {}", msg);
+                                let _ = result_tx.send(Err(msg));
+                                continue;
+                            }
+                        }
+                    }
+                    None => {
+                        println!("[SkinnyV] Using default output device");
+                        host.default_output_device()
+                    }
                 };
 
                 let device = match device {
                     Some(d) => d,
-                    None => continue,
+                    None => {
+                        let msg = "No output device found".to_string();
+                        println!("[SkinnyV] ERROR: {}", msg);
+                        let _ = result_tx.send(Err(msg));
+                        continue;
+                    }
                 };
 
                 let supported = match device.default_output_config() {
-                    Ok(c) => c,
+                    Ok(c) => {
+                        println!("[SkinnyV] Device config: {:?}, sample format: {:?}", c.channels(), c.sample_format());
+                        c
+                    }
                     Err(e) => {
-                        eprintln!("Failed to get output config: {}", e);
+                        let msg = format!("Failed to get output config: {}", e);
+                        println!("[SkinnyV] ERROR: {}", msg);
+                        let _ = result_tx.send(Err(msg));
                         continue;
                     }
                 };
 
                 let sample_format = supported.sample_format();
-                let config = supported.into();
+                let config: cpal::StreamConfig = supported.into();
+
+                println!("[SkinnyV] Building input stream (loopback) with format {:?}", sample_format);
 
                 let tx = sample_tx.clone();
                 let stream = match sample_format {
                     SampleFormat::F32 => device.build_input_stream(
                         &config,
                         move |data: &[f32], _: &_| { let _ = tx.send(data.to_vec()); },
-                        |err| eprintln!("Stream error: {}", err),
+                        |err| eprintln!("[SkinnyV] Stream error: {}", err),
                         None,
                     ),
                     SampleFormat::I16 => {
@@ -241,7 +292,7 @@ fn audio_thread(
                                 let converted: Vec<f32> = data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
                                 let _ = tx.send(converted);
                             },
-                            |err| eprintln!("Stream error: {}", err),
+                            |err| eprintln!("[SkinnyV] Stream error: {}", err),
                             None,
                         )
                     }
@@ -253,45 +304,63 @@ fn audio_thread(
                                 let converted: Vec<f32> = data.iter().map(|&s| (s as f32 - 32768.0) / 32768.0).collect();
                                 let _ = tx.send(converted);
                             },
-                            |err| eprintln!("Stream error: {}", err),
+                            |err| eprintln!("[SkinnyV] Stream error: {}", err),
                             None,
                         )
                     }
                     fmt => {
-                        eprintln!("Unsupported sample format: {:?}", fmt);
+                        let msg = format!("Unsupported sample format: {:?}", fmt);
+                        println!("[SkinnyV] ERROR: {}", msg);
+                        let _ = result_tx.send(Err(msg));
                         continue;
                     }
                 };
 
                 match stream {
                     Ok(s) => {
-                        if let Err(e) = s.play() {
-                            eprintln!("Failed to play stream: {}", e);
-                        } else {
-                            active_stream = Some(s);
+                        println!("[SkinnyV] Stream built successfully, playing...");
+                        match s.play() {
+                            Ok(_) => {
+                                println!("[SkinnyV] Stream playing!");
+                                active_stream = Some(s);
+                                let _ = result_tx.send(Ok(()));
+                            }
+                            Err(e) => {
+                                let msg = format!("Failed to play stream: {}", e);
+                                println!("[SkinnyV] ERROR: {}", msg);
+                                let _ = result_tx.send(Err(msg));
+                            }
                         }
                     }
-                    Err(e) => eprintln!("Failed to build stream: {}", e),
+                    Err(e) => {
+                        let msg = format!("Failed to build input stream: {}", e);
+                        println!("[SkinnyV] ERROR: {}", msg);
+                        let _ = result_tx.send(Err(msg));
+                    }
                 }
             }
             AudioCommand::Stop => {
+                println!("[SkinnyV] Stopping capture");
                 active_stream.take();
                 break;
             }
         }
     }
+
+    println!("[SkinnyV] Audio thread exiting");
 }
 
 /// Compute logarithmically-spaced frequency bins from FFT spectrum.
 fn compute_bins(
     spectrum: &[rustfft::num_complex::Complex<f32>],
     num_bins: usize,
-    sample_rate: u32,
 ) -> Vec<f32> {
     let n = spectrum.len();
     let usable = n / 2;
 
-    let min_bin = (20.0 * n as f32 / sample_rate as f32).max(1.0) as usize;
+    // Use a reasonable sample rate for bin calculation (48kHz typical)
+    let sample_rate = 48000.0f32;
+    let min_bin = (20.0 * n as f32 / sample_rate).max(1.0) as usize;
     let max_bin = usable;
 
     let mut bins = Vec::with_capacity(num_bins);
