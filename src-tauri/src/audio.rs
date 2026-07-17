@@ -93,8 +93,8 @@ impl AudioEngine {
             })
             .ok();
 
-        // Wait for the audio thread to report success or failure
-        match result_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+        // Wait briefly for the audio thread to report success or failure
+        match result_rx.recv_timeout(std::time::Duration::from_secs(10)) {
             Ok(result) => {
                 if result.is_ok() {
                     *self.running.lock() = true;

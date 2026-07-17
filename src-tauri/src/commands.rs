@@ -10,8 +10,8 @@ pub fn list_audio_devices() -> Vec<AudioDeviceInfo> {
 
 /// Start capturing audio from a device (or default if None).
 #[tauri::command]
-pub fn start_capture(
-    state: tauri::State<AppState>,
+pub async fn start_capture(
+    state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
     device_id: Option<String>,
 ) -> Result<(), String> {
@@ -20,7 +20,7 @@ pub fn start_capture(
 
 /// Stop audio capture.
 #[tauri::command]
-pub fn stop_capture(state: tauri::State<AppState>) -> Result<(), String> {
+pub async fn stop_capture(state: tauri::State<'_, AppState>) -> Result<(), String> {
     state.audio_engine.lock().stop();
     Ok(())
 }

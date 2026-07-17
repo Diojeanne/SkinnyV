@@ -1,16 +1,4 @@
-// Control panel — device selection, monitor management, visualization mode picker
-
-// We import dynamically so that if the Tauri API isn't ready yet, we can retry.
-
-let invoke, emitFn, listenFn;
-
-async function loadTauriAPI() {
-    const core = await import("@tauri-apps/api/core");
-    const event = await import("@tauri-apps/api/event");
-    invoke = core.invoke;
-    emitFn = event.emit;
-    listenFn = event.listen;
-}
+// Control panel — uses window.__TAURI__ globals (enabled via withGlobalTauri in tauri.conf.json)
 
 let audioDevices = [];
 let monitors = [];
@@ -24,21 +12,20 @@ export async function initControl() {
     const app = document.getElementById("app");
     app.innerHTML = renderShell();
 
-    try {
-        await loadTauriAPI();
-        console.log("[SkinnyV] Tauri API loaded");
-    } catch (e) {
-        console.error("[SkinnyV] Failed to load Tauri API:", e);
-        app.innerHTML = `<div style="color:#ff4757;padding:20px;font-family:monospace">
-            Failed to load Tauri API: ${e}<br><br>
-            Make sure you're running via "cargo tauri dev", not opening the HTML directly.</div>`;
+    // Wait for Tauri global to be available
+    if (!window.__TAURI__) {
+        app.innerHTML = `<div style="color:#ff4757;padding:20px;font-family:monospace;font-size:14px">
+            Tauri global not available. Running outside of Tauri?</div>`;
         return;
     }
 
-    await refreshDevices();
-    await refreshMonitors();
-    bindEvents();
-    setupModeSelector();
+    const { invoke } = window.__TAURI__.core;
+    const { emit } = window.__TAURI__.event;
+
+    await refreshDevices(invoke);
+    await refreshMonitors(invoke);
+    bindEvents(invoke, emit);
+    setupModeSelector(emit);
 }
 
 function renderShell() {
@@ -51,18 +38,15 @@ function renderShell() {
                 <span id="status-text">Idle</span>
             </div>
         </header>
-
         <section class="panel-section">
             <h2>Audio Source</h2>
             <select id="device-select" class="select"></select>
             <button id="capture-toggle" class="btn btn-primary">Start Capture</button>
         </section>
-
         <section class="panel-section">
             <h2>Displays</h2>
-            <div id="monitor-list" class="monitor-list"><div class="monitor-card">Loading monitors...</div></div>
+            <div id="monitor-list" class="monitor-list"><div class="monitor-card">Loading...</div></div>
         </section>
-
         <section class="panel-section">
             <h2>Visualization Mode</h2>
             <div class="mode-grid" id="mode-grid">
@@ -72,7 +56,6 @@ function renderShell() {
                 <button class="mode-btn" data-mode="particles">Particles</button>
             </div>
         </section>
-
         <section class="panel-section">
             <h2>Color Theme</h2>
             <div class="theme-row" id="theme-row">
@@ -83,20 +66,17 @@ function renderShell() {
                 <button class="theme-swatch" data-theme="mono" style="--c: #ffffff"></button>
             </div>
         </section>
-
         <footer class="panel-footer">
             <span>SkinnyV 0.1.0 · GPL-3.0</span>
         </footer>
-    </div>
-    `;
+    </div>`;
 }
 
-async function refreshDevices() {
+async function refreshDevices(invoke) {
     try {
         audioDevices = await invoke("list_audio_devices");
-        console.log("[SkinnyV] Audio devices:", audioDevices);
     } catch (e) {
-        console.error("[SkinnyV] Failed to list audio devices:", e);
+        console.error("[SkinnyV] list_audio_devices failed:", e);
         audioDevices = [];
     }
     const select = document.getElementById("device-select");
@@ -109,12 +89,11 @@ async function refreshDevices() {
     ).join("");
 }
 
-async function refreshMonitors() {
+async function refreshMonitors(invoke) {
     try {
         monitors = await invoke("list_monitors");
-        console.log("[SkinnyV] Monitors:", monitors);
     } catch (e) {
-        console.error("[SkinnyV] Failed to list monitors:", e);
+        console.error("[SkinnyV] list_monitors failed:", e);
         monitors = [];
     }
     const list = document.getElementById("monitor-list");
@@ -133,36 +112,32 @@ async function refreshMonitors() {
                 <input type="checkbox" data-monitor="${m.id}" class="monitor-toggle">
                 <span class="toggle-slider"></span>
             </label>
-        </div>
-    `).join("");
+        </div>`).join("");
 
     document.querySelectorAll(".monitor-toggle").forEach((cb) => {
         cb.addEventListener("change", async (e) => {
             const monitorId = parseInt(e.target.dataset.monitor);
             if (e.target.checked) {
                 try {
-                    console.log("[SkinnyV] Opening visualizer on monitor", monitorId);
-                    const label = await invoke("open_visualizer_window", { monitorId });
-                    console.log("[SkinnyV] Visualizer window:", label);
+                    await invoke("open_visualizer_window", { monitorId });
                     activeVisualizers.add(monitorId);
                 } catch (err) {
-                    console.error("[SkinnyV] Failed to open visualizer:", err);
+                    console.error("[SkinnyV] open_visualizer_window failed:", err);
                     e.target.checked = false;
                 }
             } else {
                 try {
-                    console.log("[SkinnyV] Closing visualizer on monitor", monitorId);
                     await invoke("close_visualizer_window", { monitorId });
                     activeVisualizers.delete(monitorId);
                 } catch (err) {
-                    console.error("[SkinnyV] Failed to close visualizer:", err);
+                    console.error("[SkinnyV] close_visualizer_window failed:", err);
                 }
             }
         });
     });
 }
 
-function bindEvents() {
+function bindEvents(invoke, emit) {
     const captureBtn = document.getElementById("capture-toggle");
     const deviceSelect = document.getElementById("device-select");
 
@@ -171,18 +146,17 @@ function bindEvents() {
         if (running) {
             try {
                 await invoke("stop_capture");
-                captureBtn.textContent = "Start Capture";
-                captureBtn.dataset.running = "false";
-                captureBtn.classList.remove("btn-stop");
-                captureBtn.classList.add("btn-primary");
-                updateStatus(false, null);
             } catch (err) {
-                console.error("[SkinnyV] Failed to stop capture:", err);
+                console.error("[SkinnyV] stop_capture failed:", err);
             }
+            captureBtn.textContent = "Start Capture";
+            captureBtn.dataset.running = "false";
+            captureBtn.classList.remove("btn-stop");
+            captureBtn.classList.add("btn-primary");
+            updateStatus(false, null);
         } else {
             const deviceId = deviceSelect.value || null;
             try {
-                console.log("[SkinnyV] Starting capture, device:", deviceId);
                 await invoke("start_capture", { deviceId });
                 captureBtn.textContent = "Stop Capture";
                 captureBtn.dataset.running = "true";
@@ -190,7 +164,7 @@ function bindEvents() {
                 captureBtn.classList.add("btn-stop");
                 updateStatus(true, deviceId);
             } catch (err) {
-                console.error("[SkinnyV] Failed to start capture:", err);
+                console.error("[SkinnyV] start_capture failed:", err);
                 showError(String(err));
             }
         }
@@ -203,30 +177,29 @@ function bindEvents() {
                 await invoke("start_capture", { deviceId });
                 updateStatus(true, deviceId);
             } catch (err) {
-                console.error("[SkinnyV] Failed to switch device:", err);
+                console.error("[SkinnyV] device switch failed:", err);
             }
         }
     });
 }
 
-function setupModeSelector() {
+function setupModeSelector(emit) {
     document.querySelectorAll(".mode-btn").forEach((btn) => {
         btn.addEventListener("click", () => {
             document.querySelectorAll(".mode-btn").forEach((b) => b.classList.remove("active"));
             btn.classList.add("active");
             currentMode = btn.dataset.mode;
             localStorage.setItem("skinnyv-mode", currentMode);
-            if (emitFn) emitFn("settings-change", { key: "mode", value: currentMode });
+            emit("settings-change", { key: "mode", value: currentMode });
         });
     });
-
     document.querySelectorAll(".theme-swatch").forEach((btn) => {
         btn.addEventListener("click", () => {
             document.querySelectorAll(".theme-swatch").forEach((b) => b.classList.remove("active"));
             btn.classList.add("active");
             const theme = btn.dataset.theme;
             localStorage.setItem("skinnyv-theme", theme);
-            if (emitFn) emitFn("settings-change", { key: "theme", value: theme });
+            emit("settings-change", { key: "theme", value: theme });
         });
     });
 }
