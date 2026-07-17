@@ -96,6 +96,12 @@
                 <button class="mode-btn" data-mode="wave">Wave Sea</button>
                 <button class="mode-btn" data-mode="mirror">Mirror</button>
                 <button class="mode-btn" data-mode="matrix">Matrix Rain</button>
+                <button class="mode-btn" data-mode="terrain">Terrain</button>
+                <button class="mode-btn" data-mode="lattice">Lattice</button>
+                <button class="mode-btn" data-mode="bloom">Bloom</button>
+                <button class="mode-btn" data-mode="ribbon">Ribbon</button>
+                <button class="mode-btn" data-mode="galaxy">Galaxy</button>
+                <button class="mode-btn" data-mode="ripples">Ripples</button>
             </div>
         </div>
         <div class="panel-section">
@@ -362,6 +368,17 @@
             var mirrorPhase = 0;
             var matrixCols = [];
             var matrixInit = false;
+            // State for more modes
+            var terrainPhase = 0;
+            var terrainHeightmap = [];
+            var latticeNodes = [];
+            var latticeInit = false;
+            var bloomPetals = [];
+            var ribbonPhase = 0;
+            var galaxyStars = [];
+            var galaxyInit = false;
+            var galaxyRot = 0;
+            var ripples = [];
 
             var THEMES = {
                 aurora:  ["#00f5d4","#00bbf9","#9b5de5","#f15bb5"],
@@ -452,6 +469,12 @@
                     else if (mode === "wave") renderWaveSea();
                     else if (mode === "mirror") renderMirror();
                     else if (mode === "matrix") renderMatrix();
+                    else if (mode === "terrain") renderTerrain();
+                    else if (mode === "lattice") renderLattice();
+                    else if (mode === "bloom") renderBloom();
+                    else if (mode === "ribbon") renderRibbon();
+                    else if (mode === "galaxy") renderGalaxy();
+                    else if (mode === "ripples") renderRipples();
                 } catch(e) {}
                 requestAnimationFrame(render);
             }
@@ -779,6 +802,320 @@
                     }
                 }
                 ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+            }
+
+            // ── TERRAIN ────────────────────────────────────────────
+            // 3D-ish wireframe landscape that scrolls toward viewer, height from freq bins
+            function renderTerrain() {
+                var c = colors(), w = canvas.width, h = canvas.height;
+                var cx = w/2, cy = h/2;
+                terrainPhase += 0.02 + volume * 0.05;
+                var rows = 24;
+                var cols = 32;
+                var horizon = h * 0.35;
+                var maxH = h * 0.5;
+
+                // Update heightmap — shift rows, add new one from freq data
+                if (terrainHeightmap.length === 0) {
+                    for (var r = 0; r < rows; r++) {
+                        var row = new Float32Array(cols);
+                        for (var i = 0; i < cols; i++) row[i] = 0;
+                        terrainHeightmap.push(row);
+                    }
+                }
+                // Shift
+                terrainHeightmap.shift();
+                var newRow = new Float32Array(cols);
+                for (var i = 0; i < cols; i++) {
+                    var binIdx = Math.floor((i / cols) * smoothedBins.length);
+                    newRow[i] = smoothedBins[binIdx];
+                }
+                terrainHeightmap.push(newRow);
+
+                // Draw as wireframe with perspective
+                for (var r = 0; r < rows; r++) {
+                    var t = r / rows; // 0=far, 1=near
+                    var perspective = 0.2 + t * 0.8;
+                    var rowY = horizon + t * (h - horizon);
+                    var rowW = w * perspective;
+                    var rowOffset = (w - rowW) / 2;
+                    var rowH = maxH * (0.3 + t * 0.7);
+
+                    var col = c[Math.floor(t * c.length) % c.length];
+                    ctx.strokeStyle = col;
+                    ctx.lineWidth = 1 + t * 2;
+                    ctx.globalAlpha = 0.3 + t * 0.5;
+                    ctx.beginPath();
+
+                    for (var i = 0; i < cols; i++) {
+                        var x = rowOffset + (i / (cols-1)) * rowW;
+                        var heightVal = terrainHeightmap[r][i];
+                        var y = rowY - heightVal * rowH;
+                        if (i === 0) ctx.moveTo(x, y);
+                        else ctx.lineTo(x, y);
+                    }
+                    ctx.stroke();
+
+                    // Fill below
+                    if (r === rows - 1 || r % 3 === 0) {
+                        ctx.globalAlpha = 0.05;
+                        ctx.lineTo(rowOffset + rowW, h);
+                        ctx.lineTo(rowOffset, h);
+                        ctx.closePath();
+                        ctx.fillStyle = col; ctx.fill();
+                    }
+                }
+                ctx.globalAlpha = 1;
+            }
+
+            // ── LATTICE ────────────────────────────────────────────
+            // Grid of nodes connected by lines, each node pulses with a freq bin
+            function renderLattice() {
+                var c = colors(), w = canvas.width, h = canvas.height;
+                var gridW = 16, gridH = 10;
+                var spacingX = w / (gridW + 1);
+                var spacingY = h / (gridH + 1);
+
+                if (!latticeInit) {
+                    for (var y = 0; y < gridH; y++) {
+                        for (var x = 0; x < gridW; x++) {
+                            latticeNodes.push({ x: (x+1)*spacingX, y: (y+1)*spacingY, baseX: (x+1)*spacingX, baseY: (y+1)*spacingY });
+                        }
+                    }
+                    latticeInit = true;
+                }
+
+                // Update node positions based on freq bins
+                for (var i = 0; i < latticeNodes.length; i++) {
+                    var node = latticeNodes[i];
+                    var binIdx = Math.floor((i / latticeNodes.length) * smoothedBins.length);
+                    var v = smoothedBins[binIdx];
+                    var wobble = v * spacingY * 0.4;
+                    node.x = node.baseX + Math.sin(terrainPhase + i * 0.3) * wobble;
+                    node.y = node.baseY + Math.cos(terrainPhase * 0.7 + i * 0.2) * wobble;
+                }
+                terrainPhase += 0.02 + volume * 0.06;
+
+                // Draw connections
+                for (var y = 0; y < gridH; y++) {
+                    for (var x = 0; x < gridW; x++) {
+                        var idx = y * gridW + x;
+                        var node = latticeNodes[idx];
+                        var binIdx = Math.floor((idx / latticeNodes.length) * smoothedBins.length);
+                        var v = smoothedBins[binIdx];
+                        var col = c[Math.floor((idx / latticeNodes.length) * c.length) % c.length];
+
+                        // Right neighbor
+                        if (x < gridW - 1) {
+                            var right = latticeNodes[idx + 1];
+                            ctx.strokeStyle = col; ctx.globalAlpha = 0.2 + v * 0.6;
+                            ctx.lineWidth = 1 + v * 3;
+                            ctx.beginPath(); ctx.moveTo(node.x, node.y); ctx.lineTo(right.x, right.y); ctx.stroke();
+                        }
+                        // Bottom neighbor
+                        if (y < gridH - 1) {
+                            var below = latticeNodes[idx + gridW];
+                            ctx.beginPath(); ctx.moveTo(node.x, node.y); ctx.lineTo(below.x, below.y); ctx.stroke();
+                        }
+
+                        // Node dot
+                        if (v > 0.15) {
+                            ctx.fillStyle = col;
+                            ctx.globalAlpha = v;
+                            ctx.shadowBlur = 10 * v; ctx.shadowColor = col;
+                            ctx.beginPath(); ctx.arc(node.x, node.y, 2 + v * 5, 0, Math.PI*2); ctx.fill();
+                        }
+                    }
+                }
+                ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+            }
+
+            // ── BLOOM ──────────────────────────────────────────────
+            // Flower-like petals that grow and rotate with the music
+            function renderBloom() {
+                var c = colors(), w = canvas.width, h = canvas.height;
+                var cx = w/2, cy = h/2;
+                var maxR = Math.min(w, h) * 0.45;
+                var petals = 8;
+
+                for (var p = 0; p < petals; p++) {
+                    var angle = (p / petals) * Math.PI * 2 + terrainPhase * 0.3;
+                    var binIdx = Math.floor((p / petals) * smoothedBins.length);
+                    var v = smoothedBins[binIdx];
+                    var petalLen = maxR * (0.2 + v * 0.8);
+                    var petalWidth = maxR * 0.15 * (0.5 + v);
+
+                    var col = c[p % c.length];
+                    ctx.fillStyle = col;
+                    ctx.globalAlpha = 0.15 + v * 0.35;
+                    ctx.shadowBlur = 20 * v; ctx.shadowColor = col;
+
+                    // Draw petal as a curved shape
+                    ctx.beginPath();
+                    var baseAngle = angle;
+                    var tipX = cx + Math.cos(baseAngle) * petalLen;
+                    var tipY = cy + Math.sin(baseAngle) * petalLen;
+                    var perpX = Math.cos(baseAngle + Math.PI/2) * petalWidth;
+                    var perpY = Math.sin(baseAngle + Math.PI/2) * petalWidth;
+
+                    ctx.moveTo(cx, cy);
+                    ctx.quadraticCurveTo(cx + perpX, tipY - perpY * 0.3, tipX, tipY);
+                    ctx.quadraticCurveTo(cx - perpX, tipY + perpY * 0.3, cx, cy);
+                    ctx.fill();
+                }
+                ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+
+                // Center
+                var cg = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR * 0.1);
+                cg.addColorStop(0, c[0] + "cc"); cg.addColorStop(1, "transparent");
+                ctx.fillStyle = cg; ctx.fillRect(cx - maxR*0.1, cy - maxR*0.1, maxR*0.2, maxR*0.2);
+
+                terrainPhase += 0.01 + volume * 0.04;
+            }
+
+            // ── RIBBON ──────────────────────────────────────────────
+            // Flowing ribbon that snakes across the screen, width from freq data
+            function renderRibbon() {
+                var c = colors(), w = canvas.width, h = canvas.height;
+                ribbonPhase += 0.03 + volume * 0.06;
+                var segs = 120;
+                var baseY = h / 2;
+                var amp = h * 0.35;
+
+                // Draw multiple ribbons
+                for (var layer = 0; layer < 4; layer++) {
+                    var col = c[layer % c.length];
+                    ctx.strokeStyle = col;
+                    ctx.lineWidth = 6 + layer * 3;
+                    ctx.globalAlpha = 0.3 + (3-layer) * 0.15;
+                    ctx.shadowBlur = 15; ctx.shadowColor = col;
+                    ctx.beginPath();
+
+                    var phase = ribbonPhase + layer * 0.4;
+                    for (var i = 0; i <= segs; i++) {
+                        var t = i / segs;
+                        var x = t * w;
+                        var binIdx = Math.floor(t * smoothedBins.length);
+                        var v = smoothedBins[binIdx];
+                        var y = baseY + Math.sin(t * 6 + phase) * amp * (0.3 + v) +
+                                Math.sin(t * 13 + phase * 1.3) * amp * 0.3 * (0.5 + v) +
+                                (layer - 1.5) * 40;
+                        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                    }
+                    ctx.stroke();
+                }
+                ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+            }
+
+            // ── GALAXY ──────────────────────────────────────────────
+            // Spiral galaxy of stars, arms react to freq bins
+            function renderGalaxy() {
+                var c = colors(), w = canvas.width, h = canvas.height;
+                var cx = w/2, cy = h/2;
+                var maxR = Math.min(w, h) * 0.48;
+                galaxyRot += 0.003 + volume * 0.01;
+
+                if (!galaxyInit) {
+                    for (var i = 0; i < 800; i++) {
+                        var arm = i % 4;
+                        var dist = Math.pow(Math.random(), 0.5) * maxR;
+                        var armAngle = (arm / 4) * Math.PI * 2 + dist * 0.008; // spiral
+                        galaxyStars.push({
+                            dist: dist, armAngle: armAngle, arm: arm,
+                            size: 0.5 + Math.random() * 2.5,
+                            twinkle: Math.random() * Math.PI * 2
+                        });
+                    }
+                    galaxyInit = true;
+                }
+
+                for (var i = 0; i < galaxyStars.length; i++) {
+                    var s = galaxyStars[i];
+                    var binIdx = Math.floor((s.dist / maxR) * smoothedBins.length * 0.7);
+                    var v = smoothedBins[binIdx];
+                    var angle = s.armAngle + galaxyRot;
+                    var x = cx + Math.cos(angle) * s.dist;
+                    var y = cy + Math.sin(angle) * s.dist;
+                    s.twinkle += 0.05;
+                    var twinkle = 0.6 + Math.sin(s.twinkle) * 0.4;
+                    var brightness = twinkle * (0.3 + v * 0.7);
+                    var col = c[s.arm % c.length];
+
+                    ctx.globalAlpha = brightness;
+                    ctx.fillStyle = col;
+                    ctx.shadowBlur = s.size * 3 * (1 + v); ctx.shadowColor = col;
+                    ctx.beginPath(); ctx.arc(x, y, s.size * (1 + v * 1.5), 0, Math.PI*2); ctx.fill();
+                }
+                ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+
+                // Core glow
+                var cg = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR * 0.15);
+                cg.addColorStop(0, c[0] + "aa"); cg.addColorStop(0.5, c[1] + "40"); cg.addColorStop(1, "transparent");
+                ctx.fillStyle = cg; ctx.fillRect(cx - maxR*0.15, cy - maxR*0.15, maxR*0.3, maxR*0.3);
+            }
+
+            // ── RIPPLES ──────────────────────────────────────────────
+            // Concentric ripples emanating from beat hits, like rain on water
+            function renderRipples() {
+                var c = colors(), w = canvas.width, h = canvas.height;
+                var cx = w/2, cy = h/2;
+                var maxR = Math.min(w, h) * 0.6;
+
+                // Spawn ripple on beat
+                if (beatPulse > 0.5) {
+                    ripples.push({
+                        x: cx + (Math.random() - 0.5) * w * 0.3,
+                        y: cy + (Math.random() - 0.5) * h * 0.3,
+                        r: 0, maxR: maxR * (0.5 + Math.random() * 0.5),
+                        col: c[Math.floor(Math.random() * c.length)],
+                        life: 1
+                    });
+                }
+                // Also spawn based on volume
+                if (volume > 0.15 && Math.random() < 0.3) {
+                    ripples.push({
+                        x: cx + (Math.random() - 0.5) * w * 0.5,
+                        y: cy + (Math.random() - 0.5) * h * 0.5,
+                        r: 0, maxR: maxR * (0.3 + volume * 0.5),
+                        col: c[Math.floor(Math.random() * c.length)],
+                        life: 1
+                    });
+                }
+
+                for (var i = ripples.length - 1; i >= 0; i--) {
+                    var rp = ripples[i];
+                    rp.r += 4 + volume * 8;
+                    rp.life = 1 - (rp.r / rp.maxR);
+                    if (rp.life <= 0) { ripples.splice(i, 1); continue; }
+
+                    ctx.strokeStyle = rp.col;
+                    ctx.globalAlpha = rp.life * 0.7;
+                    ctx.lineWidth = 2 + rp.life * 4;
+                    ctx.shadowBlur = 10 * rp.life; ctx.shadowColor = rp.col;
+                    ctx.beginPath(); ctx.arc(rp.x, rp.y, rp.r, 0, Math.PI*2); ctx.stroke();
+
+                    // Inner ring
+                    if (rp.r > 10) {
+                        ctx.globalAlpha = rp.life * 0.3;
+                        ctx.lineWidth = 1;
+                        ctx.beginPath(); ctx.arc(rp.x, rp.y, rp.r * 0.7, 0, Math.PI*2); ctx.stroke();
+                    }
+                }
+                ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+
+                // Also draw spectrum bars at bottom for constant visual
+                var barCount = 48, bw = w / barCount;
+                for (var i = 0; i < barCount; i++) {
+                    var binIdx = Math.floor((i / barCount) * smoothedBins.length);
+                    var v = smoothedBins[binIdx];
+                    var bh = v * h * 0.15;
+                    var col = c[Math.min(Math.floor((i/barCount)*c.length), c.length-1)];
+                    ctx.fillStyle = col; ctx.globalAlpha = 0.4;
+                    ctx.fillRect(i * bw, h - bh, bw * 0.85, bh);
+                }
+                ctx.globalAlpha = 1;
+
+                if (ripples.length > 80) ripples.splice(0, ripples.length - 80);
             }
 
             // Start render loop
