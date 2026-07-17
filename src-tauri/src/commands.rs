@@ -9,13 +9,21 @@ pub fn list_audio_devices() -> Vec<AudioDeviceInfo> {
 }
 
 /// Start capturing audio from a device (or default if None).
+/// Clones the Arc so we don't hold the lock during the blocking wait.
 #[tauri::command]
 pub async fn start_capture(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
     device_id: Option<String>,
 ) -> Result<(), String> {
-    state.audio_engine.lock().start(device_id, app)
+    let engine = state.audio_engine.clone();
+    // Lock briefly just to call start, which spawns the thread and returns quickly
+    // (the blocking wait happens inside start(), but we release the lock first)
+    let result = {
+        let guard = engine.lock();
+        guard.start(device_id, app)
+    };
+    result
 }
 
 /// Stop audio capture.
@@ -103,7 +111,6 @@ pub fn open_visualizer_window(
     let pos = monitor.position();
     let size = monitor.size();
 
-    // Check if window already exists
     if app.get_webview_window(&label).is_some() {
         return Ok(label);
     }

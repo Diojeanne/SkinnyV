@@ -93,19 +93,10 @@ impl AudioEngine {
             })
             .ok();
 
-        // Wait briefly for the audio thread to report success or failure
-        match result_rx.recv_timeout(std::time::Duration::from_secs(10)) {
-            Ok(result) => {
-                if result.is_ok() {
-                    *self.running.lock() = true;
-                }
-                result
-            }
-            Err(_) => {
-                *self.running.lock() = false;
-                Err("Timed out waiting for audio capture to start".to_string())
-            }
-        }
+        // Non-blocking: assume success. The audio thread will print errors to stderr.
+        // We set running=true optimistically; stop_capture checks cmd_tx anyway.
+        *self.running.lock() = true;
+        Ok(())
     }
 
     pub fn stop(&self) {

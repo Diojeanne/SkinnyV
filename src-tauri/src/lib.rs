@@ -25,11 +25,9 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 if window.label() == "control" {
                     let app = window.app_handle();
-                    // Stop audio capture first
                     if let Some(state) = app.try_state::<AppState>() {
                         state.audio_engine.lock().stop();
                     }
-                    // Exit the app — this closes all child windows automatically
                     app.exit(0);
                 }
             }
