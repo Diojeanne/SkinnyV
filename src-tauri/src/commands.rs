@@ -118,7 +118,7 @@ pub fn open_visualizer_window(
     let _window = WebviewWindowBuilder::new(
         &app,
         &label,
-        tauri::WebviewUrl::App("viz.html".into()),
+        tauri::WebviewUrl::App("index.html".into()),
     )
     .title("SkinnyV Visualizer")
     .position(pos.x as f64, pos.y as f64)

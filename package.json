@@ -2,13 +2,8 @@
   "name": "skinnyv",
   "version": "0.1.0",
   "description": "Lean system audio visualizer",
-  "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  },
-  "devDependencies": {
-    "vite": "^6"
+    "dev": "echo 'no dev server needed'",
+    "build": "mkdir -p dist && cp index.html dist/"
   }
 }
