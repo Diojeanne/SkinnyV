@@ -341,7 +341,21 @@ fn audio_thread(
     println!("[SkinnyV] Audio thread exiting");
 }
 
+/// Auto-gain state — rolling peak that decays slowly
+use std::sync::atomic::{AtomicU32, Ordering};
+
+static ROLLING_PEAK_BITS: AtomicU32 = AtomicU32::new(0); // stores f32 bits
+
+fn load_peak() -> f32 {
+    f32::from_bits(ROLLING_PEAK_BITS.load(Ordering::Relaxed))
+}
+
+fn store_peak(v: f32) {
+    ROLLING_PEAK_BITS.store(v.to_bits(), Ordering::Relaxed);
+}
+
 /// Compute logarithmically-spaced frequency bins from FFT spectrum.
+/// Uses auto-gain normalization with a decaying rolling peak.
 fn compute_bins(
     spectrum: &[rustfft::num_complex::Complex<f32>],
     num_bins: usize,
@@ -349,12 +363,12 @@ fn compute_bins(
     let n = spectrum.len();
     let usable = n / 2;
 
-    // Use a reasonable sample rate for bin calculation (48kHz typical)
-    let sample_rate = 48000.0f32;
-    let min_bin = (20.0 * n as f32 / sample_rate).max(1.0) as usize;
+    let min_bin = (20.0 * n as f32 / 48000.0).max(1.0) as usize;
     let max_bin = usable;
 
     let mut bins = Vec::with_capacity(num_bins);
+    let mut frame_max = 0.0f32;
+
     for i in 0..num_bins {
         let t0 = i as f32 / num_bins as f32;
         let t1 = (i + 1) as f32 / num_bins as f32;
@@ -374,8 +388,25 @@ fn compute_bins(
         }
 
         let avg = if count > 0 { sum / count as f32 } else { 0.0 };
-        let normalized = (avg / (FFT_SIZE as f32 / 2.0)).min(1.0);
-        bins.push(normalized);
+        if avg > frame_max { frame_max = avg; }
+        bins.push(avg);
+    }
+
+    // Auto-gain with decaying rolling peak:
+    // - If this frame's peak is higher than the rolling peak, jump up immediately
+    // - Otherwise decay the rolling peak slowly (0.98 per frame ≈ 2-3 second decay at 60fps)
+    let mut peak = load_peak();
+    if frame_max > peak {
+        peak = frame_max;
+    } else {
+        peak = peak * 0.98;
+    }
+    peak = peak.max(0.5);
+    store_peak(peak);
+
+    // Normalize bins against the rolling peak
+    for b in bins.iter_mut() {
+        *b = (*b / peak).min(1.0);
     }
 
     bins

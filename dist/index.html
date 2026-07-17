@@ -507,15 +507,15 @@
 
             function renderParticles() {
                 var c=colors(), w=canvas.width, h=canvas.height, cx=w/2, cy=h/2;
-                if (beatPulse>0.5) { var n=Math.floor(beatPulse*40); for (var i=0;i<n;i++) { var a=Math.random()*Math.PI*2, s=2+Math.random()*12*(volume*10);
-                    particles.push({x:cx,y:cy,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:1,col:c[Math.floor(Math.random()*c.length)],sz:3+Math.random()*8}); } }
-                if (volume>0.01) { var n2=Math.floor(volume*15); for (var i=0;i<n2;i++) { var a2=Math.random()*Math.PI*2, s2=1+Math.random()*6*(volume*10);
-                    particles.push({x:cx+(Math.random()-0.5)*w*0.3,y:cy+(Math.random()-0.5)*h*0.3,vx:Math.cos(a2)*s2,vy:Math.sin(a2)*s2,life:1,col:c[Math.floor(Math.random()*c.length)],sz:2+Math.random()*6}); } }
-                for (var i=particles.length-1;i>=0;i--) { var p=particles[i]; p.x+=p.vx; p.y+=p.vy; p.vx*=0.99; p.vy*=0.99; p.life-=0.008;
-                    if (p.life<=0||p.x<-100||p.x>w+100||p.y<-100||p.y>h+100) { particles.splice(i,1); continue; }
+                if (beatPulse>0.5) { var n=Math.floor(beatPulse*60); for (var i=0;i<n;i++) { var a=Math.random()*Math.PI*2, s=4+Math.random()*20*(volume*10+1);
+                    particles.push({x:cx,y:cy,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:1,col:c[Math.floor(Math.random()*c.length)],sz:3+Math.random()*10}); } }
+                if (volume>0.01) { var n2=Math.floor(volume*20); for (var i=0;i<n2;i++) { var a2=Math.random()*Math.PI*2, s2=2+Math.random()*10*(volume*10+1);
+                    particles.push({x:cx+(Math.random()-0.5)*w*0.4,y:cy+(Math.random()-0.5)*h*0.4,vx:Math.cos(a2)*s2,vy:Math.sin(a2)*s2,life:1,col:c[Math.floor(Math.random()*c.length)],sz:2+Math.random()*8}); } }
+                for (var i=particles.length-1;i>=0;i--) { var p=particles[i]; p.x+=p.vx; p.y+=p.vy; p.vx*=0.985; p.vy*=0.985; p.life-=0.006;
+                    if (p.life<=0||p.x<-200||p.x>w+200||p.y<-200||p.y>h+200) { particles.splice(i,1); continue; }
                     ctx.globalAlpha=p.life; ctx.fillStyle=p.col; ctx.shadowBlur=p.sz*4; ctx.shadowColor=p.col;
                     ctx.beginPath(); ctx.arc(p.x,p.y,p.sz,0,Math.PI*2); ctx.fill(); }
-                ctx.globalAlpha=1; ctx.shadowBlur=0; if (particles.length>3000) particles.splice(0,particles.length-3000);
+                ctx.globalAlpha=1; ctx.shadowBlur=0; if (particles.length>4000) particles.splice(0,particles.length-4000);
             }
 
             // ── RADIAL BARS ─────────────────────────────────────────
@@ -650,9 +650,9 @@
             // Multiple sine wave layers flowing across screen, like an ocean
             function renderWaveSea() {
                 var c = colors(), w = canvas.width, h = canvas.height;
-                waveSeaPhase += 0.02 + volume * 0.03;
+                waveSeaPhase += 0.04 + volume * 0.08;
                 var layers = 6;
-                var amp = h * 0.12 * (1 + volume * 2);
+                var amp = h * 0.15 * (1 + volume * 3);
 
                 for (var l = 0; l < layers; l++) {
                     var baseY = h * (0.3 + l * 0.08);
@@ -747,10 +747,16 @@
                     var col = matrixCols[i];
                     var binIdx = Math.floor((i / numCols) * smoothedBins.length);
                     var v = smoothedBins[binIdx];
-                    col.y += col.speed * (1 + v * 3);
+                    // Speed scales with frequency bin value — louder frequencies fall faster
+                    col.y += col.speed * (1 + v * 8);
                     if (col.y > h + col.len * 14) {
                         col.y = -col.len * 14;
                         col.speed = 2 + Math.random() * 6;
+                    }
+
+                    // On beat, randomly extend column length for a burst effect
+                    if (beatPulse > 0.5 && Math.random() < 0.1) {
+                        col.len = 10 + Math.floor(Math.random() * 30);
                     }
 
                     var x = i * colW + colW / 2;
@@ -763,11 +769,11 @@
                         if (j === 0) {
                             ctx.fillStyle = "#ffffff";
                             ctx.globalAlpha = 1;
-                            ctx.shadowBlur = 8; ctx.shadowColor = c[0];
+                            ctx.shadowBlur = 8 + v * 12; ctx.shadowColor = c[0];
                         } else {
                             ctx.fillStyle = c[Math.floor(brightness * c.length) % c.length];
-                            ctx.globalAlpha = brightness * (0.4 + v * 0.6);
-                            ctx.shadowBlur = 0;
+                            ctx.globalAlpha = brightness * (0.3 + v * 0.7);
+                            ctx.shadowBlur = v > 0.3 ? 4 : 0;
                         }
                         ctx.fillText(char, x, charY);
                     }
