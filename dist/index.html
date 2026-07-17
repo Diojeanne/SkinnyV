@@ -381,16 +381,16 @@
 
             function renderSpectrum() {
                 var c = colors(), w = canvas.width, h = canvas.height;
-                var n = 64, bw = w / n, gap = bw * 0.15;
+                var n = 96, bw = w / n, gap = bw * 0.12;
                 for (var i = 0; i < n; i++) {
                     var v = smoothedBins[Math.floor((i/n)*smoothedBins.length)];
-                    var bh = v*h*0.85, x = i*bw+gap/2, y = h-bh;
+                    var bh = v*h*0.95, x = i*bw+gap/2, y = h-bh;
                     var col = c[Math.min(Math.floor((i/n)*c.length), c.length-1)];
                     ctx.fillStyle = col; ctx.fillRect(x,y,bw-gap,bh);
-                    ctx.shadowBlur = 20*v; ctx.shadowColor = col; ctx.fillRect(x,y,bw-gap,bh); ctx.shadowBlur = 0;
-                    ctx.globalAlpha = 0.2; ctx.fillRect(x,h,bw-gap,-bh*0.3); ctx.globalAlpha = 1;
+                    ctx.shadowBlur = 30*v; ctx.shadowColor = col; ctx.fillRect(x,y,bw-gap,bh); ctx.shadowBlur = 0;
+                    ctx.globalAlpha = 0.25; ctx.fillRect(x,h,bw-gap,-bh*0.5); ctx.globalAlpha = 1;
                 }
-                if (beatPulse > 0.1) { ctx.fillStyle = "rgba(255,255,255,"+(beatPulse*0.05)+")"; ctx.fillRect(0,0,w,h); }
+                if (beatPulse > 0.1) { ctx.fillStyle = "rgba(255,255,255,"+(beatPulse*0.08)+")"; ctx.fillRect(0,0,w,h); }
             }
 
             function renderWaveform() {
@@ -398,47 +398,47 @@
                 var f = new Float32Array(smoothedBins.length);
                 for (var i=0; i<smoothedBins.length; i++) f[i] = smoothedBins[i];
                 waveformHistory.push(f);
-                if (waveformHistory.length > 5) waveformHistory.shift();
+                if (waveformHistory.length > 8) waveformHistory.shift();
                 for (var l=0; l<waveformHistory.length; l++) {
                     var d = waveformHistory[l];
-                    ctx.strokeStyle = c[l%c.length]; ctx.globalAlpha = (l+1)/waveformHistory.length*0.6;
-                    ctx.lineWidth = 2; ctx.beginPath();
-                    for (var i=0; i<d.length; i++) { var x=(i/d.length)*w, y=mid+(d[i]-0.5)*h*0.6; if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); }
+                    ctx.strokeStyle = c[l%c.length]; ctx.globalAlpha = (l+1)/waveformHistory.length*0.7;
+                    ctx.lineWidth = 3; ctx.beginPath();
+                    for (var i=0; i<d.length; i++) { var x=(i/d.length)*w, y=mid+(d[i]-0.5)*h*0.9; if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); }
                     ctx.stroke();
                 }
-                ctx.globalAlpha = 1; ctx.strokeStyle = c[0]; ctx.lineWidth = 4;
-                ctx.shadowBlur = 15; ctx.shadowColor = c[0]; ctx.beginPath();
-                for (var i=0; i<smoothedBins.length; i++) { var x=(i/smoothedBins.length)*w, y=mid+(smoothedBins[i]-0.5)*h*0.6; if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); }
+                ctx.globalAlpha = 1; ctx.strokeStyle = c[0]; ctx.lineWidth = 6;
+                ctx.shadowBlur = 25; ctx.shadowColor = c[0]; ctx.beginPath();
+                for (var i=0; i<smoothedBins.length; i++) { var x=(i/smoothedBins.length)*w, y=mid+(smoothedBins[i]-0.5)*h*0.9; if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); }
                 ctx.stroke(); ctx.shadowBlur = 0;
             }
 
             function renderCircular() {
                 var c = colors(), w = canvas.width, h = canvas.height;
-                var cx=w/2, cy=h/2, br=Math.min(w,h)*0.2, me=Math.min(w,h)*0.25, segs=128;
+                var cx=w/2, cy=h/2, br=Math.min(w,h)*0.35, me=Math.min(w,h)*0.4, segs=128;
                 for (var i=0; i<segs; i++) {
                     var a=(i/segs)*Math.PI*2-Math.PI/2, v=smoothedBins[Math.floor((i/segs)*smoothedBins.length)];
                     var r2=br+v*me, col=c[Math.floor((i/segs)*c.length)%c.length];
-                    ctx.strokeStyle=col; ctx.lineWidth=3; ctx.shadowBlur=10*v; ctx.shadowColor=col; ctx.beginPath();
+                    ctx.strokeStyle=col; ctx.lineWidth=5; ctx.shadowBlur=15*v; ctx.shadowColor=col; ctx.beginPath();
                     ctx.moveTo(cx+Math.cos(a)*br, cy+Math.sin(a)*br); ctx.lineTo(cx+Math.cos(a)*r2, cy+Math.sin(a)*r2); ctx.stroke();
                 }
                 ctx.shadowBlur=0;
-                if (beatPulse>0.1) { ctx.strokeStyle=c[0]; ctx.globalAlpha=beatPulse*0.5; ctx.lineWidth=2;
-                    ctx.beginPath(); ctx.arc(cx,cy,br*(1+beatPulse*0.2),0,Math.PI*2); ctx.stroke(); ctx.globalAlpha=1; }
-                var g=ctx.createRadialGradient(cx,cy,0,cx,cy,br); g.addColorStop(0,c[0]+"40"); g.addColorStop(1,"transparent");
+                if (beatPulse>0.1) { ctx.strokeStyle=c[0]; ctx.globalAlpha=beatPulse*0.6; ctx.lineWidth=4;
+                    ctx.beginPath(); ctx.arc(cx,cy,br*(1+beatPulse*0.3),0,Math.PI*2); ctx.stroke(); ctx.globalAlpha=1; }
+                var g=ctx.createRadialGradient(cx,cy,0,cx,cy,br); g.addColorStop(0,c[0]+"60"); g.addColorStop(1,"transparent");
                 ctx.fillStyle=g; ctx.fillRect(cx-br,cy-br,br*2,br*2);
             }
 
             function renderParticles() {
                 var c=colors(), w=canvas.width, h=canvas.height, cx=w/2, cy=h/2;
-                if (beatPulse>0.5) { var n=Math.floor(beatPulse*20); for (var i=0;i<n;i++) { var a=Math.random()*Math.PI*2, s=2+Math.random()*6*(volume*10);
-                    particles.push({x:cx,y:cy,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:1,col:c[Math.floor(Math.random()*c.length)],sz:2+Math.random()*4}); } }
-                if (volume>0.01) { var n2=Math.floor(volume*5); for (var i=0;i<n2;i++) { var a2=Math.random()*Math.PI*2, s2=1+Math.random()*3*(volume*10);
-                    particles.push({x:cx+(Math.random()-0.5)*100,y:cy+(Math.random()-0.5)*100,vx:Math.cos(a2)*s2,vy:Math.sin(a2)*s2,life:1,col:c[Math.floor(Math.random()*c.length)],sz:1+Math.random()*3}); } }
-                for (var i=particles.length-1;i>=0;i--) { var p=particles[i]; p.x+=p.vx; p.y+=p.vy; p.vx*=0.99; p.vy*=0.99; p.life-=0.01;
-                    if (p.life<=0||p.x<-50||p.x>w+50||p.y<-50||p.y>h+50) { particles.splice(i,1); continue; }
-                    ctx.globalAlpha=p.life; ctx.fillStyle=p.col; ctx.shadowBlur=p.sz*3; ctx.shadowColor=p.col;
+                if (beatPulse>0.5) { var n=Math.floor(beatPulse*40); for (var i=0;i<n;i++) { var a=Math.random()*Math.PI*2, s=2+Math.random()*12*(volume*10);
+                    particles.push({x:cx,y:cy,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:1,col:c[Math.floor(Math.random()*c.length)],sz:3+Math.random()*8}); } }
+                if (volume>0.01) { var n2=Math.floor(volume*15); for (var i=0;i<n2;i++) { var a2=Math.random()*Math.PI*2, s2=1+Math.random()*6*(volume*10);
+                    particles.push({x:cx+(Math.random()-0.5)*w*0.3,y:cy+(Math.random()-0.5)*h*0.3,vx:Math.cos(a2)*s2,vy:Math.sin(a2)*s2,life:1,col:c[Math.floor(Math.random()*c.length)],sz:2+Math.random()*6}); } }
+                for (var i=particles.length-1;i>=0;i--) { var p=particles[i]; p.x+=p.vx; p.y+=p.vy; p.vx*=0.99; p.vy*=0.99; p.life-=0.008;
+                    if (p.life<=0||p.x<-100||p.x>w+100||p.y<-100||p.y>h+100) { particles.splice(i,1); continue; }
+                    ctx.globalAlpha=p.life; ctx.fillStyle=p.col; ctx.shadowBlur=p.sz*4; ctx.shadowColor=p.col;
                     ctx.beginPath(); ctx.arc(p.x,p.y,p.sz,0,Math.PI*2); ctx.fill(); }
-                ctx.globalAlpha=1; ctx.shadowBlur=0; if (particles.length>2000) particles.splice(0,particles.length-2000);
+                ctx.globalAlpha=1; ctx.shadowBlur=0; if (particles.length>3000) particles.splice(0,particles.length-3000);
             }
 
             ctx.fillStyle = "#000"; ctx.fillRect(0, 0, canvas.width, canvas.height);
