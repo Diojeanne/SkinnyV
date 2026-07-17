@@ -92,6 +92,12 @@
                 <button class="mode-btn" data-mode="waveform">Waveform</button>
                 <button class="mode-btn" data-mode="circular">Circular</button>
                 <button class="mode-btn" data-mode="particles">Particles</button>
+                <button class="mode-btn" data-mode="radial">Radial Bars</button>
+                <button class="mode-btn" data-mode="tunnel">Tunnel</button>
+                <button class="mode-btn" data-mode="starburst">Starburst</button>
+                <button class="mode-btn" data-mode="wave">Wave Sea</button>
+                <button class="mode-btn" data-mode="mirror">Mirror</button>
+                <button class="mode-btn" data-mode="matrix">Matrix Rain</button>
             </div>
         </div>
         <div class="panel-section">
@@ -315,6 +321,13 @@
             var smoothedBins = new Float32Array(128);
             var waveformHistory = [];
             var particles = [];
+            // State for new modes
+            var tunnelPhase = 0;
+            var starburstRays = [];
+            var waveSeaPhase = 0;
+            var mirrorPhase = 0;
+            var matrixCols = [];
+            var matrixInit = false;
 
             var THEMES = {
                 aurora: ["#00f5d4","#00bbf9","#9b5de5","#f15bb5"],
@@ -375,6 +388,12 @@
                     else if (mode === "waveform") renderWaveform();
                     else if (mode === "circular") renderCircular();
                     else if (mode === "particles") renderParticles();
+                    else if (mode === "radial") renderRadial();
+                    else if (mode === "tunnel") renderTunnel();
+                    else if (mode === "starburst") renderStarburst();
+                    else if (mode === "wave") renderWaveSea();
+                    else if (mode === "mirror") renderMirror();
+                    else if (mode === "matrix") renderMatrix();
                 } catch(e) {}
                 requestAnimationFrame(render);
             }
@@ -441,6 +460,264 @@
                 ctx.globalAlpha=1; ctx.shadowBlur=0; if (particles.length>3000) particles.splice(0,particles.length-3000);
             }
 
+            // ── RADIAL BARS ─────────────────────────────────────────
+            // Bars radiating outward from center, like a sun
+            function renderRadial() {
+                var c = colors(), w = canvas.width, h = canvas.height;
+                var cx = w/2, cy = h/2;
+                var maxR = Math.min(w, h) * 0.48;
+                var bars = 72;
+                var innerR = Math.min(w, h) * 0.08;
+
+                for (var i = 0; i < bars; i++) {
+                    var angle = (i / bars) * Math.PI * 2;
+                    var binIdx = Math.floor((i / bars) * smoothedBins.length);
+                    var v = smoothedBins[binIdx];
+                    var barLen = v * (maxR - innerR);
+                    var r1 = innerR, r2 = innerR + barLen;
+
+                    var x1 = cx + Math.cos(angle) * r1, y1 = cy + Math.sin(angle) * r1;
+                    var x2 = cx + Math.cos(angle) * r2, y2 = cy + Math.sin(angle) * r2;
+
+                    var col = c[Math.floor((i / bars) * c.length) % c.length];
+                    ctx.strokeStyle = col;
+                    ctx.lineWidth = (Math.PI * 2 * r1 / bars) * 0.7;
+                    ctx.shadowBlur = 20 * v; ctx.shadowColor = col;
+                    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+
+                    // Dot at the tip
+                    if (v > 0.1) {
+                        ctx.fillStyle = col;
+                        ctx.beginPath(); ctx.arc(x2, y2, 3 + v * 5, 0, Math.PI * 2); ctx.fill();
+                    }
+                }
+                ctx.shadowBlur = 0;
+
+                // Pulsing inner ring
+                var ringR = innerR * (1 + beatPulse * 0.5);
+                ctx.strokeStyle = c[0]; ctx.globalAlpha = 0.3 + beatPulse * 0.4;
+                ctx.lineWidth = 2 + beatPulse * 4;
+                ctx.beginPath(); ctx.arc(cx, cy, ringR, 0, Math.PI * 2); ctx.stroke();
+                ctx.globalAlpha = 1;
+            }
+
+            // ── TUNNEL ──────────────────────────────────────────────
+            // Concentric rotating polygons that zoom toward you
+            function renderTunnel() {
+                var c = colors(), w = canvas.width, h = canvas.height;
+                var cx = w/2, cy = h/2;
+                var maxR = Math.min(w, h) * 0.7;
+                tunnelPhase += 0.015 + volume * 0.05;
+
+                var rings = 20;
+                for (var r = rings; r >= 0; r--) {
+                    var t = (r + tunnelPhase % 1) / rings;
+                    var radius = t * maxR;
+                    if (radius < 2) continue;
+                    var sides = 6;
+                    var rot = tunnelPhase * 0.5 + r * 0.3;
+                    var alpha = (1 - t) * 0.8;
+                    var colIdx = Math.floor(t * c.length) % c.length;
+                    var col = c[colIdx];
+
+                    ctx.globalAlpha = alpha;
+                    ctx.strokeStyle = col;
+                    ctx.lineWidth = 2 + (1 - t) * 4;
+                    ctx.shadowBlur = 15 * (1 - t); ctx.shadowColor = col;
+                    ctx.beginPath();
+                    for (var s = 0; s <= sides; s++) {
+                        var a = (s / sides) * Math.PI * 2 + rot;
+                        var px = cx + Math.cos(a) * radius, py = cy + Math.sin(a) * radius;
+                        if (s === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+                    }
+                    ctx.stroke();
+                }
+                ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+
+                // Beat flash from center
+                if (beatPulse > 0.1) {
+                    var g = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR * 0.3);
+                    g.addColorStop(0, c[0] + "aa"); g.addColorStop(1, "transparent");
+                    ctx.globalAlpha = beatPulse * 0.5; ctx.fillStyle = g;
+                    ctx.fillRect(0, 0, w, h); ctx.globalAlpha = 1;
+                }
+            }
+
+            // ── STARBURST ───────────────────────────────────────────
+            // Rays shooting from center, length driven by freq bins
+            function renderStarburst() {
+                var c = colors(), w = canvas.width, h = canvas.height;
+                var cx = w/2, cy = h/2;
+                var maxR = Math.min(w, h) * 0.5;
+
+                // Init rays
+                if (starburstRays.length === 0) {
+                    for (var i = 0; i < 128; i++) {
+                        starburstRays.push({ angle: (i/128) * Math.PI * 2, len: 0, target: 0 });
+                    }
+                }
+
+                for (var i = 0; i < starburstRays.length; i++) {
+                    var ray = starburstRays[i];
+                    var binIdx = Math.floor((i / starburstRays.length) * smoothedBins.length);
+                    ray.target = smoothedBins[binIdx] * maxR;
+                    ray.len = ray.len * 0.8 + ray.target * 0.2;
+
+                    var col = c[Math.floor((i / starburstRays.length) * c.length) % c.length];
+                    var x2 = cx + Math.cos(ray.angle) * ray.len;
+                    var y2 = cy + Math.sin(ray.angle) * ray.len;
+
+                    // Tapered ray
+                    ctx.strokeStyle = col;
+                    ctx.lineWidth = 1 + (ray.len / maxR) * 4;
+                    ctx.shadowBlur = 10 * (ray.len / maxR); ctx.shadowColor = col;
+                    ctx.globalAlpha = 0.4 + (ray.len / maxR) * 0.6;
+                    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x2, y2); ctx.stroke();
+
+                    // Star at tip on strong hits
+                    if (ray.len > maxR * 0.5) {
+                        ctx.fillStyle = col;
+                        ctx.beginPath(); ctx.arc(x2, y2, 2 + (ray.len/maxR)*4, 0, Math.PI*2); ctx.fill();
+                    }
+                }
+                ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+
+                // Central glow
+                var cg = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR * 0.15);
+                cg.addColorStop(0, c[0] + "80"); cg.addColorStop(1, "transparent");
+                ctx.fillStyle = cg; ctx.fillRect(cx - maxR*0.15, cy - maxR*0.15, maxR*0.3, maxR*0.3);
+            }
+
+            // ── WAVE SEA ─────────────────────────────────────────────
+            // Multiple sine wave layers flowing across screen, like an ocean
+            function renderWaveSea() {
+                var c = colors(), w = canvas.width, h = canvas.height;
+                waveSeaPhase += 0.02 + volume * 0.03;
+                var layers = 6;
+                var amp = h * 0.12 * (1 + volume * 2);
+
+                for (var l = 0; l < layers; l++) {
+                    var baseY = h * (0.3 + l * 0.08);
+                    var freq = 0.003 + l * 0.001;
+                    var phase = waveSeaPhase + l * 0.5;
+                    var binOffset = Math.floor((l / layers) * smoothedBins.length);
+                    var binVal = smoothedBins[binOffset];
+                    var col = c[l % c.length];
+
+                    ctx.strokeStyle = col;
+                    ctx.lineWidth = 2 + l * 0.5;
+                    ctx.globalAlpha = 0.3 + (l / layers) * 0.5;
+                    ctx.shadowBlur = 10; ctx.shadowColor = col;
+                    ctx.beginPath();
+
+                    for (var x = 0; x <= w; x += 3) {
+                        var wave1 = Math.sin(x * freq + phase) * amp;
+                        var wave2 = Math.sin(x * freq * 2.3 + phase * 1.7) * amp * 0.4;
+                        var modAmp = amp * (1 + binVal * 2);
+                        var y = baseY + wave1 + wave2;
+                        if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                    }
+                    ctx.stroke();
+
+                    // Fill below the wave
+                    ctx.globalAlpha = 0.05 + (l / layers) * 0.05;
+                    ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath();
+                    ctx.fillStyle = col; ctx.fill();
+                }
+                ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+            }
+
+            // ── MIRROR ──────────────────────────────────────────────
+            // Symmetric kaleidoscope-like mirror of spectrum bars
+            function renderMirror() {
+                var c = colors(), w = canvas.width, h = canvas.height;
+                mirrorPhase += 0.005 + volume * 0.02;
+                var cx = w/2, cy = h/2;
+                var bars = 48;
+                var maxBar = Math.min(w, h) * 0.45;
+
+                ctx.save();
+                ctx.translate(cx, cy);
+
+                // Draw 4 mirrored quadrants
+                for (var quad = 0; quad < 4; quad++) {
+                    ctx.save();
+                    ctx.rotate(quad * Math.PI / 2 + mirrorPhase);
+
+                    for (var i = 0; i < bars / 4; i++) {
+                        var binIdx = Math.floor((i / (bars/4)) * smoothedBins.length * 0.5);
+                        var v = smoothedBins[binIdx];
+                        var barH = v * maxBar;
+                        var bw = (Math.PI * 2 * maxBar) / bars * 2;
+                        var col = c[Math.floor((i / (bars/4)) * c.length) % c.length];
+
+                        ctx.fillStyle = col;
+                        ctx.shadowBlur = 15 * v; ctx.shadowColor = col;
+                        ctx.fillRect(i * bw, 0, bw * 0.8, barH);
+                    }
+                    ctx.restore();
+                }
+                ctx.restore();
+                ctx.shadowBlur = 0;
+
+                // Center pulse
+                if (beatPulse > 0.1) {
+                    ctx.strokeStyle = c[0]; ctx.globalAlpha = beatPulse * 0.4; ctx.lineWidth = 3;
+                    ctx.beginPath(); ctx.arc(cx, cy, 20 + beatPulse * 30, 0, Math.PI * 2); ctx.stroke();
+                    ctx.globalAlpha = 1;
+                }
+            }
+
+            // ── MATRIX RAIN ─────────────────────────────────────────
+            // Audio-reactive digital rain (Matrix-style)
+            function renderMatrix() {
+                var c = colors(), w = canvas.width, h = canvas.height;
+                var colW = 14;
+                var numCols = Math.floor(w / colW);
+
+                if (!matrixInit) {
+                    for (var i = 0; i < numCols; i++) {
+                        matrixCols.push({ y: Math.random() * h, speed: 2 + Math.random() * 6, len: 5 + Math.floor(Math.random() * 20) });
+                    }
+                    matrixInit = true;
+                }
+
+                ctx.font = "14px monospace";
+                ctx.textAlign = "center";
+
+                for (var i = 0; i < matrixCols.length; i++) {
+                    var col = matrixCols[i];
+                    var binIdx = Math.floor((i / numCols) * smoothedBins.length);
+                    var v = smoothedBins[binIdx];
+                    col.y += col.speed * (1 + v * 3);
+                    if (col.y > h + col.len * 14) {
+                        col.y = -col.len * 14;
+                        col.speed = 2 + Math.random() * 6;
+                    }
+
+                    var x = i * colW + colW / 2;
+                    for (var j = 0; j < col.len; j++) {
+                        var charY = col.y - j * 14;
+                        if (charY < 0 || charY > h) continue;
+                        var brightness = 1 - (j / col.len);
+                        var char = String.fromCharCode(0x30A0 + Math.floor(Math.random() * 96));
+
+                        if (j === 0) {
+                            ctx.fillStyle = "#ffffff";
+                            ctx.globalAlpha = 1;
+                            ctx.shadowBlur = 8; ctx.shadowColor = c[0];
+                        } else {
+                            ctx.fillStyle = c[Math.floor(brightness * c.length) % c.length];
+                            ctx.globalAlpha = brightness * (0.4 + v * 0.6);
+                            ctx.shadowBlur = 0;
+                        }
+                        ctx.fillText(char, x, charY);
+                    }
+                }
+                ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+            }
+
+            // Start render loop
             ctx.fillStyle = "#000"; ctx.fillRect(0, 0, canvas.width, canvas.height);
             dlog("render loop starting");
             requestAnimationFrame(render);
