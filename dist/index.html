@@ -7,7 +7,13 @@
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { background: #000; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
 
-        /* Control panel styles */
+        /* Error display — always visible */
+        #fatal-error {
+            display: none; position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
+            background: #ff4757; color: #fff; padding: 16px; font-family: monospace; font-size: 13px;
+        }
+
+        /* Control panel */
         #control-panel {
             max-width: 420px; margin: 0 auto; padding: 24px 20px;
             display: none; flex-direction: column; gap: 24px; min-height: 100vh;
@@ -48,17 +54,19 @@
         .theme-swatch.active { border-color: #e4e4ef; }
         .panel-footer { text-align: center; font-size: 11px; color: #6b6b80; padding-top: 8px; border-top: 1px solid #2a2a3a; margin-top: auto; }
 
-        /* Visualizer styles */
+        /* Visualizer */
         #viz-canvas { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; }
         #close-btn { display: none; position: fixed; top: 10px; right: 10px; z-index: 999;
-            background: rgba(255,255,255,0.1); color: #fff; border: 1px solid rgba(255,255,255,0.2);
-            border-radius: 6px; padding: 6px 14px; font-size: 13px; cursor: pointer; }
-        #close-btn:hover { background: rgba(255,255,255,0.2); }
+            background: rgba(255,255,255,0.2); color: #fff; border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 6px; padding: 8px 16px; font-size: 14px; cursor: pointer; }
+        #close-btn:hover { background: rgba(255,255,255,0.3); }
         #debug { display: none; position: fixed; bottom: 10px; left: 10px; z-index: 999;
-            color: #0f0; font-family: monospace; font-size: 11px; opacity: 0.5; pointer-events: none; }
+            color: #0f0; font-family: monospace; font-size: 12px; pointer-events: none; }
     </style>
 </head>
 <body>
+    <div id="fatal-error"></div>
+
     <!-- Control panel -->
     <div id="control-panel">
         <div class="panel-header">
@@ -102,75 +110,94 @@
     <!-- Visualizer -->
     <canvas id="viz-canvas"></canvas>
     <button id="close-btn">✕ Close (ESC)</button>
-    <div id="debug">SkinnyV</div>
+    <div id="debug">boot</div>
 
     <script>
-        // ═══════════════════════════════════════════════════════
-        // SkinnyV — single-file, all inline, no external deps
-        // ═══════════════════════════════════════════════════════
+        // Global error catch — show ANY JS error on screen
+        window.onerror = function(msg, src, line, col, err) {
+            var el = document.getElementById("fatal-error");
+            el.style.display = "block";
+            el.textContent = "JS ERROR: " + msg + " (line " + line + ":" + col + ") " + (err && err.stack ? err.stack : "");
+            return false;
+        };
 
         var dbg = document.getElementById("debug");
-
         function dlog(msg) {
-            dbg.textContent = msg;
+            if (dbg) { dbg.textContent = msg; }
             console.log("[SkinnyV] " + msg);
         }
 
-        // Wait for Tauri global, then determine our role
-        function waitForTauri(cb, tries) {
-            tries = tries || 0;
-            if (window.__TAURI__) {
-                dlog("Tauri ready after " + tries + " tries");
-                cb();
-                return;
+        dlog("script start");
+
+        // Show debug immediately so we can see what happens
+        dbg.style.display = "block";
+
+        // Determine role: check Tauri window label, or fall back to URL hash
+        function getRole() {
+            // Method 1: Tauri window label
+            try {
+                if (window.__TAURI__ && window.__TAURI__.window) {
+                    var label = window.__TAURI__.window.getCurrentWindow().label;
+                    dlog("label from Tauri: " + label);
+                    if (label && label.indexOf("visualizer") === 0) return "viz";
+                    if (label && label === "control") return "control";
+                }
+            } catch(e) {
+                dlog("Tauri label check failed: " + e);
             }
-            if (tries > 100) { // 10 seconds
-                dlog("Tauri never showed up!");
-                cb();
-                return;
-            }
-            setTimeout(function() { waitForTauri(cb, tries + 1); }, 100);
+
+            // Method 2: URL hash
+            if (window.location.hash === "#viz") return "viz";
+
+            // Method 3: check if __TAURI__ exists at all
+            dlog("__TAURI__ present: " + (!!window.__TAURI__));
+            if (!window.__TAURI__) return "control"; // fallback
+
+            return "control";
         }
 
-        waitForTauri(function() {
-            var label = "";
-            try {
-                label = window.__TAURI__.window.getCurrentWindow().label;
-            } catch(e) {
-                dlog("Failed to get window label: " + e);
-            }
-            dlog("Window label: " + label);
-
-            if (label.indexOf("visualizer") === 0) {
+        function init() {
+            var role = getRole();
+            dlog("role: " + role);
+            if (role === "viz") {
                 startVisualizer();
             } else {
                 startControl();
             }
-        });
+        }
 
-        // Also show a fallback after 2 seconds if Tauri doesn't show up
-        setTimeout(function() {
-            if (!window.__TAURI__) {
-                dlog("No Tauri after 2s, starting control panel as fallback");
-                startControl();
-            }
-        }, 2000);
+        // Try immediately, then retry after delay if Tauri isn't ready
+        var role = getRole();
+        if (window.__TAURI__) {
+            init();
+        } else {
+            dlog("no __TAURI__ yet, retrying...");
+            var tries = 0;
+            var timer = setInterval(function() {
+                tries++;
+                if (window.__TAURI__ || tries > 50) {
+                    clearInterval(timer);
+                    init();
+                } else {
+                    dlog("waiting for Tauri... " + tries);
+                }
+            }, 100);
+        }
 
         // ────────────────────────────────────────────────────────
         // CONTROL PANEL
         // ────────────────────────────────────────────────────────
         function startControl() {
-            dlog("Starting control panel");
+            dlog("starting control panel");
             document.getElementById("control-panel").style.display = "flex";
-            var invoke, emit;
 
-            if (window.__TAURI__ && window.__TAURI__.core) {
-                invoke = window.__TAURI__.core.invoke;
-                emit = window.__TAURI__.event.emit;
-            } else {
+            if (!window.__TAURI__ || !window.__TAURI__.core) {
                 document.getElementById("monitor-list").innerHTML = "Tauri API not available";
                 return;
             }
+
+            var invoke = window.__TAURI__.core.invoke;
+            var emit = window.__TAURI__.event ? window.__TAURI__.event.emit : null;
 
             // Load devices
             invoke("list_audio_devices").then(function(devices) {
@@ -183,7 +210,7 @@
                     return '<option value="' + d.id + '" ' + (d.is_default ? "selected" : "") + ">" +
                         d.name + (d.is_default ? " (Default)" : "") + "</option>";
                 }).join("");
-            }).catch(function(e) { console.error(e); });
+            }).catch(function(e) { dlog("list_audio_devices error: " + e); });
 
             // Load monitors
             invoke("list_monitors").then(function(monitors) {
@@ -196,7 +223,7 @@
                     return '<div class="monitor-card ' + (m.is_primary ? "primary" : "") + '">' +
                         '<div class="monitor-info"><span class="monitor-name">' + m.name +
                         (m.is_primary ? " (Primary)" : "") + '</span><span class="monitor-res">' +
-                        m.width + "×" + m.height + "</span></div>" +
+                        m.width + "x" + m.height + "</span></div>" +
                         '<label class="toggle"><input type="checkbox" data-monitor="' + m.id +
                         '" class="monitor-toggle"><span class="toggle-slider"></span></label></div>';
                 }).join("");
@@ -206,64 +233,66 @@
                         var monitorId = parseInt(e.target.dataset.monitor);
                         if (e.target.checked) {
                             invoke("open_visualizer_window", { monitorId: monitorId })
-                                .catch(function(err) { console.error(err); e.target.checked = false; });
+                                .catch(function(err) { dlog("open viz error: " + err); e.target.checked = false; });
                         } else {
                             invoke("close_visualizer_window", { monitorId: monitorId })
-                                .catch(function(err) { console.error(err); });
+                                .catch(function(err) { dlog("close viz error: " + err); });
                         }
                     });
                 });
-            }).catch(function(e) { console.error(e); });
+            }).catch(function(e) { dlog("list_monitors error: " + e); });
 
             // Capture button
             var captureBtn = document.getElementById("capture-toggle");
             var deviceSelect = document.getElementById("device-select");
 
-            captureBtn.addEventListener("click", function() {
+            captureBtn.onclick = function() {
+                dlog("capture button clicked, running=" + captureBtn.dataset.running);
                 var running = captureBtn.dataset.running === "true";
                 if (running) {
+                    dlog("calling stop_capture");
                     invoke("stop_capture").then(function() {
+                        dlog("stop_capture returned OK");
                         captureBtn.textContent = "Start Capture";
                         captureBtn.dataset.running = "false";
                         captureBtn.className = "btn btn-primary";
                         document.getElementById("status-dot").classList.remove("active");
                         document.getElementById("status-text").textContent = "Idle";
-                    }).catch(function(e) { console.error(e); });
+                    }).catch(function(e) { dlog("stop_capture error: " + e); });
                 } else {
                     var deviceId = deviceSelect.value || null;
+                    dlog("calling start_capture, device=" + deviceId);
                     invoke("start_capture", { deviceId: deviceId }).then(function() {
+                        dlog("start_capture returned OK");
                         captureBtn.textContent = "Stop Capture";
                         captureBtn.dataset.running = "true";
                         captureBtn.className = "btn btn-stop";
                         document.getElementById("status-dot").classList.add("active");
                         document.getElementById("status-text").textContent = "Capturing";
-                    }).catch(function(e) {
-                        console.error(e);
-                        document.getElementById("status-text").textContent = "Error";
-                    });
+                    }).catch(function(e) { dlog("start_capture error: " + e); });
                 }
-            });
+            };
 
             // Mode buttons
             document.querySelectorAll(".mode-btn").forEach(function(btn) {
-                btn.addEventListener("click", function() {
+                btn.onclick = function() {
                     document.querySelectorAll(".mode-btn").forEach(function(b) { b.classList.remove("active"); });
                     btn.classList.add("active");
-                    var mode = btn.dataset.mode;
-                    localStorage.setItem("skinnyv-mode", mode);
-                    if (emit) emit("settings-change", { key: "mode", value: mode });
-                });
+                    var m = btn.dataset.mode;
+                    localStorage.setItem("skinnyv-mode", m);
+                    if (emit) emit("settings-change", { key: "mode", value: m });
+                };
             });
 
             // Theme buttons
             document.querySelectorAll(".theme-swatch").forEach(function(btn) {
-                btn.addEventListener("click", function() {
+                btn.onclick = function() {
                     document.querySelectorAll(".theme-swatch").forEach(function(b) { b.classList.remove("active"); });
                     btn.classList.add("active");
-                    var theme = btn.dataset.theme;
-                    localStorage.setItem("skinnyv-theme", theme);
-                    if (emit) emit("settings-change", { key: "theme", value: theme });
-                });
+                    var t = btn.dataset.theme;
+                    localStorage.setItem("skinnyv-theme", t);
+                    if (emit) emit("settings-change", { key: "theme", value: t });
+                };
             });
         }
 
@@ -271,11 +300,10 @@
         // VISUALIZER
         // ────────────────────────────────────────────────────────
         function startVisualizer() {
-            dlog("Starting visualizer");
+            dlog("starting visualizer");
             document.getElementById("control-panel").style.display = "none";
             document.getElementById("viz-canvas").style.display = "block";
             document.getElementById("close-btn").style.display = "block";
-            document.getElementById("debug").style.display = "block";
 
             var canvas = document.getElementById("viz-canvas");
             var ctx = canvas.getContext("2d");
@@ -303,17 +331,18 @@
             resize();
             window.addEventListener("resize", resize);
 
-            // Close button
-            document.getElementById("close-btn").addEventListener("click", function() {
-                try { window.__TAURI__.window.getCurrentWindow().close(); } catch(e) { window.close(); }
-            });
+            // Close
+            document.getElementById("close-btn").onclick = function() {
+                dlog("close clicked");
+                try { window.__TAURI__.window.getCurrentWindow().close(); } catch(e) { dlog("close error: " + e); window.close(); }
+            };
             window.addEventListener("keydown", function(e) {
                 if (e.key === "Escape") {
                     try { window.__TAURI__.window.getCurrentWindow().close(); } catch(e) { window.close(); }
                 }
             });
 
-            // Connect events
+            // Connect Tauri events
             if (window.__TAURI__ && window.__TAURI__.event) {
                 window.__TAURI__.event.listen("audio-data", function(event) {
                     var d = event.payload;
@@ -328,9 +357,9 @@
                     if (p.key === "mode") mode = p.value;
                     if (p.key === "theme") theme = p.value;
                 });
-                dlog("Events connected");
+                dlog("events connected");
             } else {
-                dlog("No Tauri event API!");
+                dlog("no Tauri event API");
             }
 
             function colors() { return THEMES[theme] || THEMES.aurora; }
@@ -374,18 +403,12 @@
                     var d = waveformHistory[l];
                     ctx.strokeStyle = c[l%c.length]; ctx.globalAlpha = (l+1)/waveformHistory.length*0.6;
                     ctx.lineWidth = 2; ctx.beginPath();
-                    for (var i=0; i<d.length; i++) {
-                        var x=(i/d.length)*w, y=mid+(d[i]-0.5)*h*0.6;
-                        if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-                    }
+                    for (var i=0; i<d.length; i++) { var x=(i/d.length)*w, y=mid+(d[i]-0.5)*h*0.6; if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); }
                     ctx.stroke();
                 }
                 ctx.globalAlpha = 1; ctx.strokeStyle = c[0]; ctx.lineWidth = 4;
                 ctx.shadowBlur = 15; ctx.shadowColor = c[0]; ctx.beginPath();
-                for (var i=0; i<smoothedBins.length; i++) {
-                    var x=(i/smoothedBins.length)*w, y=mid+(smoothedBins[i]-0.5)*h*0.6;
-                    if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-                }
+                for (var i=0; i<smoothedBins.length; i++) { var x=(i/smoothedBins.length)*w, y=mid+(smoothedBins[i]-0.5)*h*0.6; if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); }
                 ctx.stroke(); ctx.shadowBlur = 0;
             }
 
@@ -393,41 +416,33 @@
                 var c = colors(), w = canvas.width, h = canvas.height;
                 var cx=w/2, cy=h/2, br=Math.min(w,h)*0.2, me=Math.min(w,h)*0.25, segs=128;
                 for (var i=0; i<segs; i++) {
-                    var a=(i/segs)*Math.PI*2-Math.PI/2;
-                    var v=smoothedBins[Math.floor((i/segs)*smoothedBins.length)];
+                    var a=(i/segs)*Math.PI*2-Math.PI/2, v=smoothedBins[Math.floor((i/segs)*smoothedBins.length)];
                     var r2=br+v*me, col=c[Math.floor((i/segs)*c.length)%c.length];
-                    ctx.strokeStyle=col; ctx.lineWidth=3; ctx.shadowBlur=10*v; ctx.shadowColor=col;
-                    ctx.beginPath();
-                    ctx.moveTo(cx+Math.cos(a)*br, cy+Math.sin(a)*br);
-                    ctx.lineTo(cx+Math.cos(a)*r2, cy+Math.sin(a)*r2); ctx.stroke();
+                    ctx.strokeStyle=col; ctx.lineWidth=3; ctx.shadowBlur=10*v; ctx.shadowColor=col; ctx.beginPath();
+                    ctx.moveTo(cx+Math.cos(a)*br, cy+Math.sin(a)*br); ctx.lineTo(cx+Math.cos(a)*r2, cy+Math.sin(a)*r2); ctx.stroke();
                 }
                 ctx.shadowBlur=0;
                 if (beatPulse>0.1) { ctx.strokeStyle=c[0]; ctx.globalAlpha=beatPulse*0.5; ctx.lineWidth=2;
                     ctx.beginPath(); ctx.arc(cx,cy,br*(1+beatPulse*0.2),0,Math.PI*2); ctx.stroke(); ctx.globalAlpha=1; }
-                var g=ctx.createRadialGradient(cx,cy,0,cx,cy,br);
-                g.addColorStop(0,c[0]+"40"); g.addColorStop(1,"transparent");
+                var g=ctx.createRadialGradient(cx,cy,0,cx,cy,br); g.addColorStop(0,c[0]+"40"); g.addColorStop(1,"transparent");
                 ctx.fillStyle=g; ctx.fillRect(cx-br,cy-br,br*2,br*2);
             }
 
             function renderParticles() {
                 var c=colors(), w=canvas.width, h=canvas.height, cx=w/2, cy=h/2;
-                if (beatPulse>0.5) { var n=Math.floor(beatPulse*20);
-                    for (var i=0;i<n;i++) { var a=Math.random()*Math.PI*2, s=2+Math.random()*6*(volume*10);
-                        particles.push({x:cx,y:cy,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:1,col:c[Math.floor(Math.random()*c.length)],sz:2+Math.random()*4}); } }
-                if (volume>0.01) { var n2=Math.floor(volume*5);
-                    for (var i=0;i<n2;i++) { var a2=Math.random()*Math.PI*2, s2=1+Math.random()*3*(volume*10);
-                        particles.push({x:cx+(Math.random()-0.5)*100,y:cy+(Math.random()-0.5)*100,vx:Math.cos(a2)*s2,vy:Math.sin(a2)*s2,life:1,col:c[Math.floor(Math.random()*c.length)],sz:1+Math.random()*3}); } }
+                if (beatPulse>0.5) { var n=Math.floor(beatPulse*20); for (var i=0;i<n;i++) { var a=Math.random()*Math.PI*2, s=2+Math.random()*6*(volume*10);
+                    particles.push({x:cx,y:cy,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:1,col:c[Math.floor(Math.random()*c.length)],sz:2+Math.random()*4}); } }
+                if (volume>0.01) { var n2=Math.floor(volume*5); for (var i=0;i<n2;i++) { var a2=Math.random()*Math.PI*2, s2=1+Math.random()*3*(volume*10);
+                    particles.push({x:cx+(Math.random()-0.5)*100,y:cy+(Math.random()-0.5)*100,vx:Math.cos(a2)*s2,vy:Math.sin(a2)*s2,life:1,col:c[Math.floor(Math.random()*c.length)],sz:1+Math.random()*3}); } }
                 for (var i=particles.length-1;i>=0;i--) { var p=particles[i]; p.x+=p.vx; p.y+=p.vy; p.vx*=0.99; p.vy*=0.99; p.life-=0.01;
                     if (p.life<=0||p.x<-50||p.x>w+50||p.y<-50||p.y>h+50) { particles.splice(i,1); continue; }
                     ctx.globalAlpha=p.life; ctx.fillStyle=p.col; ctx.shadowBlur=p.sz*3; ctx.shadowColor=p.col;
                     ctx.beginPath(); ctx.arc(p.x,p.y,p.sz,0,Math.PI*2); ctx.fill(); }
-                ctx.globalAlpha=1; ctx.shadowBlur=0;
-                if (particles.length>2000) particles.splice(0,particles.length-2000);
+                ctx.globalAlpha=1; ctx.shadowBlur=0; if (particles.length>2000) particles.splice(0,particles.length-2000);
             }
 
-            ctx.fillStyle = "#000";
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            dlog("Render loop starting");
+            ctx.fillStyle = "#000"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            dlog("render loop starting");
             requestAnimationFrame(render);
         }
     </script>
