@@ -23,22 +23,14 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // When the control window is closed, exit the app entirely
-            // (this also closes all visualizer windows)
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 if window.label() == "control" {
                     let app = window.app_handle();
-                    // Stop audio capture
+                    // Stop audio capture first
                     if let Some(state) = app.try_state::<AppState>() {
                         state.audio_engine.lock().stop();
                     }
-                    // Close all visualizer windows
-                    for w in app.webview_windows() {
-                        if w.0.starts_with("visualizer") {
-                            let _ = w.1.close();
-                        }
-                    }
-                    // Exit the app
+                    // Exit the app — this closes all child windows automatically
                     app.exit(0);
                 }
             }

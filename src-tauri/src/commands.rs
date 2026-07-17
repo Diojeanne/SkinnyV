@@ -20,8 +20,9 @@ pub fn start_capture(
 
 /// Stop audio capture.
 #[tauri::command]
-pub fn stop_capture(state: tauri::State<AppState>) {
+pub fn stop_capture(state: tauri::State<AppState>) -> Result<(), String> {
     state.audio_engine.lock().stop();
+    Ok(())
 }
 
 /// Check if capture is running and which device.
@@ -110,7 +111,7 @@ pub fn open_visualizer_window(
     let _window = WebviewWindowBuilder::new(
         &app,
         &label,
-        tauri::WebviewUrl::App("index.html#viz".into()),
+        tauri::WebviewUrl::App("viz.html".into()),
     )
     .title("SkinnyV Visualizer")
     .position(pos.x as f64, pos.y as f64)
