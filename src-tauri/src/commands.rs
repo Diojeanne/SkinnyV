@@ -115,7 +115,7 @@ pub async fn open_visualizer_window(
     .title("SkinnyV Visualizer")
     .position(pos.x as f64, pos.y as f64)
     .inner_size(size.width as f64, size.height as f64)
-    .maximized(true)
+    .fullscreen(true)
     .decorations(false)
     .always_on_top(false)
     .skip_taskbar(false)
