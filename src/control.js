@@ -1,7 +1,7 @@
 // Control panel — device selection, monitor management, visualization mode picker
 
-const { invoke } = window.__TAURI__.core;
-const { listen } = window.__TAURI__.event;
+import { invoke } from "@tauri-apps/api/core";
+import { listen, emit } from "@tauri-apps/api/event";
 
 let audioDevices = [];
 let monitors = [];
@@ -71,22 +71,32 @@ function renderShell() {
 async function refreshDevices() {
     try {
         audioDevices = await invoke("list_audio_devices");
-    } catch {
+    } catch (e) {
+        console.error("Failed to list audio devices:", e);
         audioDevices = [];
     }
     const select = document.getElementById("device-select");
-    select.innerHTML = audioDevices.map((d) =>
-        `<option value="${d.id}" ${d.is_default ? "selected" : ""}>${d.name}${d.is_default ? " (Default)" : ""}</option>`
-    ).join("");
+    if (audioDevices.length === 0) {
+        select.innerHTML = `<option value="">No devices found</option>`;
+    } else {
+        select.innerHTML = audioDevices.map((d) =>
+            `<option value="${d.id}" ${d.is_default ? "selected" : ""}>${d.name}${d.is_default ? " (Default)" : ""}</option>`
+        ).join("");
+    }
 }
 
 async function refreshMonitors() {
     try {
         monitors = await invoke("list_monitors");
-    } catch {
+    } catch (e) {
+        console.error("Failed to list monitors:", e);
         monitors = [];
     }
     const list = document.getElementById("monitor-list");
+    if (monitors.length === 0) {
+        list.innerHTML = `<div class="monitor-card">No monitors detected</div>`;
+        return;
+    }
     list.innerHTML = monitors.map((m) => `
         <div class="monitor-card ${m.is_primary ? "primary" : ""}" data-monitor="${m.id}">
             <div class="monitor-icon">🖥</div>
@@ -101,16 +111,13 @@ async function refreshMonitors() {
         </div>
     `).join("");
 
-    // Bind toggle events
     document.querySelectorAll(".monitor-toggle").forEach((cb) => {
         cb.addEventListener("change", async (e) => {
             const monitorId = parseInt(e.target.dataset.monitor);
             if (e.target.checked) {
                 try {
-                    const label = await invoke("open_visualizer_window", { monitorId });
+                    await invoke("open_visualizer_window", { monitorId });
                     activeVisualizers.add(monitorId);
-                    // Navigate the new window to the visualizer view
-                    // The new window loads index.html — we need to tell it to be a visualizer
                 } catch (err) {
                     console.error("Failed to open visualizer:", err);
                     e.target.checked = false;
@@ -156,9 +163,7 @@ function bindEvents() {
         }
     });
 
-    // Monitor refresh button (if we add one later)
     deviceSelect.addEventListener("change", async () => {
-        // If running, restart with new device
         if (captureBtn.dataset.running === "true") {
             const deviceId = deviceSelect.value || null;
             try {
@@ -177,10 +182,8 @@ function setupModeSelector() {
             document.querySelectorAll(".mode-btn").forEach((b) => b.classList.remove("active"));
             btn.classList.add("active");
             currentMode = btn.dataset.mode;
-            // Persist to localStorage so visualizer windows can read it
             localStorage.setItem("skinnyv-mode", currentMode);
-            // Broadcast to all visualizer windows via Tauri event
-            broadcastSetting("mode", currentMode);
+            emit("settings-change", { key: "mode", value: currentMode });
         });
     });
 
@@ -190,19 +193,9 @@ function setupModeSelector() {
             btn.classList.add("active");
             const theme = btn.dataset.theme;
             localStorage.setItem("skinnyv-theme", theme);
-            broadcastSetting("theme", theme);
+            emit("settings-change", { key: "theme", value: theme });
         });
     });
-}
-
-async function broadcastSetting(key, value) {
-    // Emit a settings-change event that all visualizer windows listen for
-    try {
-        const { emit } = window.__TAURI__.event;
-        await emit("settings-change", { key, value });
-    } catch {
-        // Non-fatal
-    }
 }
 
 function updateStatus(running, device) {

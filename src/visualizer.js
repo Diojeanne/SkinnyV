@@ -1,7 +1,7 @@
 // Visualizer renderer — runs in borderless fullscreen windows on selected monitors
 // Listens for audio-data events from the Rust backend and renders to canvas
 
-const { listen } = window.__TAURI__.event;
+import { listen } from "@tauri-apps/api/event";
 
 let canvas, ctx;
 let mode = "spectrum";
