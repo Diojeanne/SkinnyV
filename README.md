@@ -1,6 +1,6 @@
 # SkinnyV
 
-Copyright (C) 2025 Clarissa Millarker
+Copyright (C) 2026 Clarissa Millarker
 
 SkinnyV is a lean, modern system audio visualizer with multi-monitor support. It captures system audio via WASAPI loopback and renders real-time visualizations across any or all connected displays, Built with Tauri 2 + Rust + plain HTML/JS/CSS.
 
@@ -12,7 +12,7 @@ SkinnyV is a lean, modern system audio visualizer with multi-monitor support. It
 - **Auto-cycle themes** — optionally rotate through all themes every 8 seconds
 - **Multi-monitor** — borderless fullscreen visualizer windows on any or all displays
 - **Modern UI** — clean dark control panel, no 1995 vibes
-- **Tiny binary** — uses system WebView2, no bundled browser (~14MB vs Electron's ~150MB)
+- **Tiny binary** — uses system WebView2, no bundled browser (~14MB)
 - **Beat detection** — rolling average comparison for reactive visual effects
 - **Auto-gain normalization** — decaying rolling peak keeps visualizations dynamic across volume levels
 
@@ -69,7 +69,7 @@ Audio data flows: WASAPI loopback → ring buffer → FFT (2048-sample Hann wind
 
 ## License
 
-Copyright (C) 2025 Clarissa Millarker
+Copyright (C) 2026 Clarissa Millarker
 
 This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
 
