@@ -2,6 +2,7 @@
 // Listens for audio-data events from the Rust backend and renders to canvas
 
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 let canvas, ctx;
 let mode = "spectrum";
@@ -28,48 +29,81 @@ const THEMES = {
 };
 
 export async function initVisualizer() {
-    canvas = document.createElement("canvas");
-    canvas.id = "viz-canvas";
-    document.body.appendChild(canvas);
+    console.log("[SkinnyV] Visualizer initializing, window label:", getCurrentWindow().label);
+
+    // Set background immediately so we don't see white
     document.body.style.margin = "0";
     document.body.style.overflow = "hidden";
     document.body.style.background = "#000";
+    document.documentElement.style.background = "#000";
+
+    canvas = document.createElement("canvas");
+    canvas.id = "viz-canvas";
+    document.body.appendChild(canvas);
 
     ctx = canvas.getContext("2d");
+    if (!ctx) {
+        console.error("[SkinnyV] Failed to get 2D context");
+        return;
+    }
 
     resize();
     window.addEventListener("resize", resize);
+
+    // Escape key closes the visualizer window
+    window.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+            getCurrentWindow().close();
+        }
+    });
 
     // Load saved settings
     mode = localStorage.getItem("skinnyv-mode") || "spectrum";
     theme = localStorage.getItem("skinnyv-theme") || "aurora";
 
     // Listen for audio data from backend
-    await listen("audio-data", (event) => {
-        const data = event.payload;
-        bins = new Float32Array(data.bins);
-        volume = data.volume;
-        peak = data.peak;
-        if (data.beat) {
-            beat = true;
-            beatPulse = 1.0;
-        }
-    });
+    try {
+        await listen("audio-data", (event) => {
+            const data = event.payload;
+            if (data && data.bins) {
+                bins = new Float32Array(data.bins);
+                volume = data.volume;
+                peak = data.peak;
+                if (data.beat) {
+                    beat = true;
+                    beatPulse = 1.0;
+                }
+            }
+        });
+        console.log("[SkinnyV] Listening for audio-data events");
+    } catch (e) {
+        console.error("[SkinnyV] Failed to listen for audio-data:", e);
+    }
 
     // Listen for settings changes from control panel
-    await listen("settings-change", (event) => {
-        const { key, value } = event.payload;
-        if (key === "mode") mode = value;
-        if (key === "theme") theme = value;
-    });
+    try {
+        await listen("settings-change", (event) => {
+            const { key, value } = event.payload;
+            if (key === "mode") mode = value;
+            if (key === "theme") theme = value;
+        });
+        console.log("[SkinnyV] Listening for settings-change events");
+    } catch (e) {
+        console.error("[SkinnyV] Failed to listen for settings-change:", e);
+    }
+
+    // Draw an initial frame so the screen is black, not white
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     // Start render loop
+    console.log("[SkinnyV] Starting render loop");
     requestAnimationFrame(render);
 }
 
 function resize() {
-    canvas.width = window.innerWidth * window.devicePixelRatio;
-    canvas.height = window.innerHeight * window.devicePixelRatio;
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
     canvas.style.width = "100vw";
     canvas.style.height = "100vh";
 }
@@ -91,19 +125,23 @@ function render() {
     // Decay beat pulse
     beatPulse *= 0.92;
 
-    switch (mode) {
-        case "spectrum":
-            renderSpectrum();
-            break;
-        case "waveform":
-            renderWaveform();
-            break;
-        case "circular":
-            renderCircular();
-            break;
-        case "particles":
-            renderParticles();
-            break;
+    try {
+        switch (mode) {
+            case "spectrum":
+                renderSpectrum();
+                break;
+            case "waveform":
+                renderWaveform();
+                break;
+            case "circular":
+                renderCircular();
+                break;
+            case "particles":
+                renderParticles();
+                break;
+        }
+    } catch (e) {
+        console.error("[SkinnyV] Render error:", e);
     }
 
     requestAnimationFrame(render);
@@ -126,28 +164,23 @@ function renderSpectrum() {
         const x = i * barWidth + gap / 2;
         const y = h - barH;
 
-        // Gradient based on height
         const t = i / barCount;
         const colorIdx = Math.floor(t * colors.length);
         const color = colors[Math.min(colorIdx, colors.length - 1)];
 
-        // Main bar
         ctx.fillStyle = color;
         ctx.fillRect(x, y, barWidth - gap, barH);
 
-        // Glow effect
         ctx.shadowBlur = 20 * value;
         ctx.shadowColor = color;
         ctx.fillRect(x, y, barWidth - gap, barH);
         ctx.shadowBlur = 0;
 
-        // Reflection
         ctx.globalAlpha = 0.2;
         ctx.fillRect(x, h, barWidth - gap, -barH * 0.3);
         ctx.globalAlpha = 1.0;
     }
 
-    // Beat flash overlay
     if (beatPulse > 0.1) {
         ctx.fillStyle = `rgba(255, 255, 255, ${beatPulse * 0.05})`;
         ctx.fillRect(0, 0, w, h);
@@ -161,7 +194,6 @@ function renderWaveform() {
     const h = canvas.height;
     const midY = h / 2;
 
-    // Store current frame for history trail
     const frame = new Float32Array(smoothedBins.length);
     for (let i = 0; i < smoothedBins.length; i++) {
         frame[i] = smoothedBins[i];
@@ -169,7 +201,6 @@ function renderWaveform() {
     waveformHistory.push(frame);
     if (waveformHistory.length > 5) waveformHistory.shift();
 
-    // Draw history trails with decreasing opacity
     for (let layer = 0; layer < waveformHistory.length; layer++) {
         const data = waveformHistory[layer];
         const opacity = (layer + 1) / waveformHistory.length * 0.6;
@@ -190,7 +221,6 @@ function renderWaveform() {
     }
     ctx.globalAlpha = 1.0;
 
-    // Main waveform — thick, glowing
     ctx.strokeStyle = colors[0];
     ctx.lineWidth = 4;
     ctx.shadowBlur = 15;
@@ -245,7 +275,6 @@ function renderCircular() {
     }
     ctx.shadowBlur = 0;
 
-    // Inner circle pulse on beat
     if (beatPulse > 0.1) {
         ctx.strokeStyle = colors[0];
         ctx.globalAlpha = beatPulse * 0.5;
@@ -272,17 +301,14 @@ function renderParticles() {
     const cx = w / 2;
     const cy = h / 2;
 
-    // Spawn particles on beat
     if (beatPulse > 0.5) {
         const count = Math.floor(beatPulse * 20);
         for (let i = 0; i < count; i++) {
             const angle = Math.random() * Math.PI * 2;
             const speed = 2 + Math.random() * 6 * (volume * 10);
             particles.push({
-                x: cx,
-                y: cy,
-                vx: Math.cos(angle) * speed,
-                vy: Math.sin(angle) * speed,
+                x: cx, y: cy,
+                vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
                 life: 1.0,
                 color: colors[Math.floor(Math.random() * colors.length)],
                 size: 2 + Math.random() * 4,
@@ -290,7 +316,6 @@ function renderParticles() {
         }
     }
 
-    // Also spawn based on volume
     if (volume > 0.01) {
         const count = Math.floor(volume * 5);
         for (let i = 0; i < count; i++) {
@@ -299,8 +324,7 @@ function renderParticles() {
             particles.push({
                 x: cx + (Math.random() - 0.5) * 100,
                 y: cy + (Math.random() - 0.5) * 100,
-                vx: Math.cos(angle) * speed,
-                vy: Math.sin(angle) * speed,
+                vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
                 life: 1.0,
                 color: colors[Math.floor(Math.random() * colors.length)],
                 size: 1 + Math.random() * 3,
@@ -308,7 +332,6 @@ function renderParticles() {
         }
     }
 
-    // Update and draw particles
     for (let i = particles.length - 1; i >= 0; i--) {
         const p = particles[i];
         p.x += p.vx;
@@ -333,7 +356,6 @@ function renderParticles() {
     ctx.globalAlpha = 1.0;
     ctx.shadowBlur = 0;
 
-    // Cap particle count for performance
     if (particles.length > 2000) {
         particles.splice(0, particles.length - 2000);
     }

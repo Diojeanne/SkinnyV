@@ -110,7 +110,7 @@ pub fn open_visualizer_window(
     let _window = WebviewWindowBuilder::new(
         &app,
         &label,
-        tauri::WebviewUrl::App("index.html?viz=1".into()),
+        tauri::WebviewUrl::App("index.html".into()),
     )
     .title("SkinnyV Visualizer")
     .position(pos.x as f64, pos.y as f64)
@@ -118,7 +118,7 @@ pub fn open_visualizer_window(
     .fullscreen(true)
     .decorations(false)
     .always_on_top(false)
-    .skip_taskbar(true)
+    .skip_taskbar(false)
     .build()
     .map_err(|e| format!("Failed to create window: {}", e))?;
 
