@@ -86,9 +86,9 @@ pub fn list_monitors(app: tauri::AppHandle) -> Vec<MonitorInfo> {
         .collect()
 }
 
-/// Open a borderless fullscreen visualizer window on a specific monitor.
+/// Open a borderless maximized visualizer window on a specific monitor.
 #[tauri::command]
-pub fn open_visualizer_window(
+pub async fn open_visualizer_window(
     app: tauri::AppHandle,
     monitor_id: u32,
 ) -> Result<String, String> {
