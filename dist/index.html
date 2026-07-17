@@ -49,9 +49,11 @@
         .mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
         .mode-btn { padding: 14px; background: #14141c; border: 1px solid #2a2a3a; border-radius: 10px; color: #6b6b80; font-size: 13px; font-weight: 500; cursor: pointer; }
         .mode-btn.active { border-color: #00f5d4; color: #00f5d4; background: rgba(0,245,212,0.08); }
-        .theme-row { display: flex; gap: 12px; }
+        .theme-row { display: flex; gap: 12px; flex-wrap: wrap; }
         .theme-swatch { width: 36px; height: 36px; border-radius: 50%; border: 2px solid #2a2a3a; cursor: pointer; }
-        .theme-swatch.active { border-color: #e4e4ef; }
+        .theme-swatch.active { border-color: #e4e4ef; box-shadow: 0 0 12px currentColor; }
+        .cycle-toggle-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 13px; color: #6b6b80; cursor: pointer; }
+        .cycle-toggle-row input { margin: 0; }
         .panel-footer { text-align: center; font-size: 11px; color: #6b6b80; padding-top: 8px; border-top: 1px solid #2a2a3a; margin-top: auto; }
 
         /* Visualizer */
@@ -108,7 +110,18 @@
                 <button class="theme-swatch" data-theme="electric" style="background:#00bbf9"></button>
                 <button class="theme-swatch" data-theme="fire" style="background:#ff6b35"></button>
                 <button class="theme-swatch" data-theme="mono" style="background:#ffffff"></button>
+                <button class="theme-swatch" data-theme="forest" style="background:#06d6a0"></button>
+                <button class="theme-swatch" data-theme="candy" style="background:#ff70a6"></button>
+                <button class="theme-swatch" data-theme="cyber" style="background:#f72585"></button>
+                <button class="theme-swatch" data-theme="deepsea" style="background:#0466c8"></button>
+                <button class="theme-swatch" data-theme="gold" style="background:#ffd60a"></button>
+                <button class="theme-swatch" data-theme="vapor" style="background:#c77dff"></button>
+                <button class="theme-swatch" data-theme="blood" style="background:#ef233c"></button>
             </div>
+            <label class="cycle-toggle-row">
+                <input type="checkbox" id="theme-cycle">
+                <span>Auto-cycle themes</span>
+            </label>
         </div>
         <div class="panel-footer"><span>SkinnyV 0.1.0 · GPL-3.0</span></div>
     </div>
@@ -300,6 +313,36 @@
                     if (emit) emit("settings-change", { key: "theme", value: t });
                 };
             });
+
+            // Theme cycle toggle
+            var cycleCheckbox = document.getElementById("theme-cycle");
+            var cycleInterval = null;
+            var cycleThemeNames = ["aurora","sunset","electric","fire","mono","forest","candy","cyber","deepsea","gold","vapor","blood"];
+            cycleCheckbox.onchange = function() {
+                var cycling = cycleCheckbox.checked;
+                localStorage.setItem("skinnyv-cycle", cycling ? "true" : "false");
+                if (emit) emit("settings-change", { key: "cycle", value: cycling });
+                if (cycling) {
+                    cycleInterval = setInterval(function() {
+                        var swatches = document.querySelectorAll(".theme-swatch");
+                        var activeIdx = 0;
+                        swatches.forEach(function(s, i) { if (s.classList.contains("active")) activeIdx = i; });
+                        activeIdx = (activeIdx + 1) % swatches.length;
+                        swatches.forEach(function(s) { s.classList.remove("active"); });
+                        swatches[activeIdx].classList.add("active");
+                        var t = swatches[activeIdx].dataset.theme;
+                        localStorage.setItem("skinnyv-theme", t);
+                        if (emit) emit("settings-change", { key: "theme", value: t });
+                    }, 8000);
+                } else {
+                    if (cycleInterval) { clearInterval(cycleInterval); cycleInterval = null; }
+                }
+            };
+            // Restore cycle state from localStorage
+            if (localStorage.getItem("skinnyv-cycle") === "true") {
+                cycleCheckbox.checked = true;
+                cycleCheckbox.onchange();
+            }
         }
 
         // ────────────────────────────────────────────────────────
@@ -330,12 +373,20 @@
             var matrixInit = false;
 
             var THEMES = {
-                aurora: ["#00f5d4","#00bbf9","#9b5de5","#f15bb5"],
-                sunset: ["#ff6b35","#f7931e","#f15bb5","#fee440"],
-                electric: ["#00bbf9","#00f5d4","#0077b6","#03045e"],
-                fire: ["#ff6b35","#f72585","#ffba08","#dc2f02"],
-                mono: ["#ffffff","#cccccc","#888888","#444444"],
+                aurora:  ["#00f5d4","#00bbf9","#9b5de5","#f15bb5"],
+                sunset:  ["#ff6b35","#f7931e","#f15bb5","#fee440"],
+                electric:["#00bbf9","#00f5d4","#0077b6","#03045e"],
+                fire:    ["#ff6b35","#f72585","#ffba08","#dc2f02"],
+                mono:    ["#ffffff","#cccccc","#888888","#444444"],
+                forest:  ["#06d6a0","#118ab2","#073b4c","#80ed99"],
+                candy:   ["#ff70a6","#ff9770","#ffd670","#70d6ff"],
+                cyber:   ["#f72585","#b5179e","#7209b7","#480ca8"],
+                deepsea: ["#0466c8","#0353a4","#48cae4","#90e0ef"],
+                gold:    ["#ffd60a","#ffc300","#ff9500","#ff6b35"],
+                vapor:   ["#c77dff","#e0aaff","#9d4edd","#5a189a"],
+                blood:   ["#ef233c","#d90429","#8d0801","#590d0d"],
             };
+            var themeNames = Object.keys(THEMES);
 
             function resize() {
                 canvas.width = window.innerWidth;
@@ -369,8 +420,28 @@
                     var p = event.payload;
                     if (p.key === "mode") mode = p.value;
                     if (p.key === "theme") theme = p.value;
+                    if (p.key === "cycle") {
+                        cycleThemes = p.value;
+                        if (cycleThemes) startCycle(); else stopCycle();
+                    }
                 });
                 dlog("events connected");
+
+                // Theme cycling
+                var cycleThemes = localStorage.getItem("skinnyv-cycle") === "true";
+                var cycleTimer = null;
+                function startCycle() {
+                    if (cycleTimer) clearInterval(cycleTimer);
+                    cycleTimer = setInterval(function() {
+                        var idx = themeNames.indexOf(theme);
+                        idx = (idx + 1) % themeNames.length;
+                        theme = themeNames[idx];
+                    }, 8000); // 8 seconds per theme
+                }
+                function stopCycle() {
+                    if (cycleTimer) { clearInterval(cycleTimer); cycleTimer = null; }
+                }
+                if (cycleThemes) startCycle();
             } else {
                 dlog("no Tauri event API");
             }
