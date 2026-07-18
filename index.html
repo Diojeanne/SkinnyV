@@ -54,6 +54,15 @@
         .theme-swatch.active { border-color: #e4e4ef; box-shadow: 0 0 12px currentColor; }
         .cycle-toggle-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 13px; color: #6b6b80; cursor: pointer; }
         .cycle-toggle-row input { margin: 0; }
+        .range-row { display: flex; align-items: center; gap: 10px; }
+        .range-row input[type="range"] { flex: 1; accent-color: #9b5de5; }
+        .range-value { font-size: 13px; color: #e4e4ef; min-width: 38px; text-align: right; }
+        .custom-panel { margin-top: 12px; padding: 12px; background: #14141c; border: 1px solid #2a2a3a; border-radius: 10px; }
+        .custom-panel-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+        .color-picker { width: 40px; height: 40px; border: none; border-radius: 8px; cursor: pointer; background: none; padding: 0; }
+        .hex-input { flex: 1; font-family: monospace; text-transform: uppercase; margin-bottom: 0; }
+        .theme-swatch.custom { border-style: dashed; border-color: #6b6b80; }
+        .hint { font-size: 11px; color: #6b6b80; margin-top: 6px; }
         .panel-footer { text-align: center; font-size: 11px; color: #6b6b80; padding-top: 8px; border-top: 1px solid #2a2a3a; margin-top: auto; }
 
         /* Visualizer */
@@ -119,11 +128,33 @@
                 <button class="theme-swatch" data-theme="gold" style="background:#ffd60a"></button>
                 <button class="theme-swatch" data-theme="vapor" style="background:#c77dff"></button>
                 <button class="theme-swatch" data-theme="blood" style="background:#ef233c"></button>
+                <button class="theme-swatch custom" id="theme-custom" data-theme="custom" style="background:#9b5de5" title="Custom color"></button>
             </div>
             <label class="cycle-toggle-row">
                 <input type="checkbox" id="theme-cycle">
                 <span>Auto-cycle themes</span>
             </label>
+            <div id="custom-theme-panel" class="custom-panel" style="display:none">
+                <div class="custom-panel-row">
+                    <input type="color" id="custom-color-picker" class="color-picker" value="#9b5de5">
+                    <input type="text" id="custom-color-hex" class="select hex-input" value="#9B5DE5" maxlength="7" placeholder="#RRGGBB">
+                </div>
+                <div class="hint">Pick a color or enter hex — a 4-shade theme is generated automatically.</div>
+            </div>
+        </div>
+        <div class="panel-section">
+            <h2>Saturation Filter</h2>
+            <label class="cycle-toggle-row" style="margin-top:0;margin-bottom:12px">
+                <input type="checkbox" id="sat-filter-toggle">
+                <span>High saturation only</span>
+            </label>
+            <div id="sat-filter-controls" style="display:none">
+                <div class="range-row">
+                    <input type="range" id="sat-min-slider" min="0" max="100" value="80">
+                    <span class="range-value" id="sat-min-value">80%</span>
+                </div>
+                <div class="hint">Colors below this saturation are boosted up to the floor.</div>
+            </div>
         </div>
         <div class="panel-footer">
             <span>SkinnyV 0.1.0 · <a href="#" id="license-link" style="color:#9b5de5;text-decoration:none">GPL-3.0</a></span>
@@ -317,7 +348,20 @@
                 };
             });
 
-            // Theme buttons
+            // Theme buttons (including custom)
+            var customSwatch = document.getElementById("theme-custom");
+            var customPanel = document.getElementById("custom-theme-panel");
+            var customPicker = document.getElementById("custom-color-picker");
+            var customHexInput = document.getElementById("custom-color-hex");
+            var customColor = localStorage.getItem("skinnyv-custom-color") || "#9b5de5";
+
+            function syncCustomSwatch() {
+                customSwatch.style.background = customColor;
+                customPicker.value = customColor;
+                customHexInput.value = customColor.toUpperCase();
+            }
+            syncCustomSwatch();
+
             document.querySelectorAll(".theme-swatch").forEach(function(btn) {
                 btn.onclick = function() {
                     document.querySelectorAll(".theme-swatch").forEach(function(b) { b.classList.remove("active"); });
@@ -325,8 +369,66 @@
                     var t = btn.dataset.theme;
                     localStorage.setItem("skinnyv-theme", t);
                     if (emit) emit("settings-change", { key: "theme", value: t });
+                    if (t === "custom") {
+                        customPanel.style.display = "block";
+                        if (emit) emit("settings-change", { key: "customColor", value: customColor });
+                    } else {
+                        customPanel.style.display = "none";
+                    }
                 };
             });
+
+            // Restore saved theme active state
+            var savedTheme = localStorage.getItem("skinnyv-theme");
+            if (savedTheme) {
+                document.querySelectorAll(".theme-swatch").forEach(function(b) {
+                    b.classList.toggle("active", b.dataset.theme === savedTheme);
+                });
+                if (savedTheme === "custom") customPanel.style.display = "block";
+            }
+
+            customPicker.oninput = function() {
+                customColor = customPicker.value;
+                localStorage.setItem("skinnyv-custom-color", customColor);
+                syncCustomSwatch();
+                if (emit) emit("settings-change", { key: "customColor", value: customColor });
+            };
+
+            customHexInput.oninput = function() {
+                var v = customHexInput.value.trim();
+                if (/^#[0-9a-fA-F]{6}$/.test(v)) {
+                    customColor = v.toLowerCase();
+                    localStorage.setItem("skinnyv-custom-color", customColor);
+                    customPicker.value = customColor;
+                    customSwatch.style.background = customColor;
+                    if (emit) emit("settings-change", { key: "customColor", value: customColor });
+                }
+            };
+
+            // Saturation filter
+            var satToggle = document.getElementById("sat-filter-toggle");
+            var satSlider = document.getElementById("sat-min-slider");
+            var satValueLabel = document.getElementById("sat-min-value");
+            var satControls = document.getElementById("sat-filter-controls");
+
+            satToggle.checked = localStorage.getItem("skinnyv-sat-filter") === "true";
+            satSlider.value = parseInt(localStorage.getItem("skinnyv-sat-min")) || 80;
+            satValueLabel.textContent = satSlider.value + "%";
+            if (satToggle.checked) satControls.style.display = "block";
+
+            satToggle.onchange = function() {
+                var on = satToggle.checked;
+                localStorage.setItem("skinnyv-sat-filter", on ? "true" : "false");
+                satControls.style.display = on ? "block" : "none";
+                if (emit) emit("settings-change", { key: "satFilter", value: on });
+            };
+
+            satSlider.oninput = function() {
+                var v = parseInt(satSlider.value);
+                satValueLabel.textContent = v + "%";
+                localStorage.setItem("skinnyv-sat-min", String(v));
+                if (emit) emit("settings-change", { key: "satMin", value: v });
+            };
 
             // Theme cycle toggle
             var cycleCheckbox = document.getElementById("theme-cycle");
@@ -980,7 +1082,75 @@
                 vapor:   ["#c77dff","#e0aaff","#9d4edd","#5a189a"],
                 blood:   ["#ef233c","#d90429","#8d0801","#590d0d"],
             };
-            var themeNames = Object.keys(THEMES);
+            var themeNames = Object.keys(THEMES).filter(function(n) { return n !== "custom"; });
+
+            // Color conversion helpers (for saturation filter and custom theme)
+            function hexToHsl(hex) {
+                hex = hex.replace("#", "");
+                var r = parseInt(hex.substr(0,2),16)/255;
+                var g = parseInt(hex.substr(2,2),16)/255;
+                var b = parseInt(hex.substr(4,2),16)/255;
+                var max = Math.max(r,g,b), min = Math.min(r,g,b);
+                var h, s, l = (max+min)/2;
+                if (max === min) { h = 0; s = 0; }
+                else {
+                    var d = max - min;
+                    s = l > 0.5 ? d/(2-max-min) : d/(max+min);
+                    if (max === r) h = (g-b)/d + (g<b?6:0);
+                    else if (max === g) h = (b-r)/d + 2;
+                    else h = (r-g)/d + 4;
+                    h *= 60;
+                }
+                return { h: h, s: s*100, l: l*100 };
+            }
+
+            function hslToHex(h, s, l) {
+                s /= 100; l /= 100;
+                var c = (1 - Math.abs(2*l - 1)) * s;
+                var x = c * (1 - Math.abs((h/60) % 2 - 1));
+                var m = l - c/2;
+                var r, g, b;
+                if (h < 60) { r=c; g=x; b=0; }
+                else if (h < 120) { r=x; g=c; b=0; }
+                else if (h < 180) { r=0; g=c; b=x; }
+                else if (h < 240) { r=0; g=x; b=c; }
+                else if (h < 300) { r=x; g=0; b=c; }
+                else { r=c; g=0; b=x; }
+                function toHex(v) { var n = Math.round((v+m)*255); var str = n.toString(16); return str.length === 1 ? "0"+str : str; }
+                return "#" + toHex(r) + toHex(g) + toHex(b);
+            }
+
+            function applySatFilter(hex, minSat) {
+                var hsl = hexToHsl(hex);
+                if (hsl.s < minSat) {
+                    hsl.s = minSat;
+                    // At l=0 (black) or l=100 (white), HSL chroma is 0 regardless
+                    // of saturation — the color can't become visible. Pull lightness
+                    // toward 50% so the boosted saturation actually produces color.
+                    if (hsl.l > 90) hsl.l = 90;
+                    else if (hsl.l < 10) hsl.l = 10;
+                }
+                return hslToHex(hsl.h, hsl.s, hsl.l);
+            }
+
+            function buildCustomTheme(hex) {
+                var hsl = hexToHsl(hex);
+                return [
+                    hex,
+                    hslToHex(hsl.h, hsl.s, Math.min(85, hsl.l + 18)),
+                    hslToHex(hsl.h, hsl.s, Math.max(20, hsl.l - 18)),
+                    hslToHex((hsl.h + 25) % 360, Math.max(40, hsl.s - 10), Math.min(75, hsl.l + 8))
+                ];
+            }
+
+            var customColor = localStorage.getItem("skinnyv-custom-color") || "#9b5de5";
+            THEMES.custom = buildCustomTheme(customColor);
+
+            var satFilter = localStorage.getItem("skinnyv-sat-filter") === "true";
+            var satMin = parseInt(localStorage.getItem("skinnyv-sat-min")) || 80;
+
+            var cachedColors = null;
+            function invalidateColors() { cachedColors = null; }
 
             function resize() {
                 canvas.width = window.innerWidth;
@@ -1009,11 +1179,19 @@
                 window.__TAURI__.event.listen("settings-change", function(event) {
                     var p = event.payload;
                     if (p.key === "mode") mode = p.value;
-                    if (p.key === "theme") theme = p.value;
+                    if (p.key === "theme") { theme = p.value; invalidateColors(); }
                     if (p.key === "cycle") {
                         cycleThemes = p.value;
                         if (cycleThemes) startCycle(); else stopCycle();
                     }
+                    if (p.key === "customColor") {
+                        customColor = p.value;
+                        localStorage.setItem("skinnyv-custom-color", customColor);
+                        THEMES.custom = buildCustomTheme(customColor);
+                        invalidateColors();
+                    }
+                    if (p.key === "satFilter") { satFilter = p.value; invalidateColors(); }
+                    if (p.key === "satMin") { satMin = p.value; invalidateColors(); }
                 });
                 dlog("events connected");
 
@@ -1026,6 +1204,7 @@
                         var idx = themeNames.indexOf(theme);
                         idx = (idx + 1) % themeNames.length;
                         theme = themeNames[idx];
+                        invalidateColors();
                     }, 8000); // 8 seconds per theme
                 }
                 function stopCycle() {
@@ -1036,7 +1215,15 @@
                 dlog("no Tauri event API");
             }
 
-            function colors() { return THEMES[theme] || THEMES.aurora; }
+            function colors() {
+                if (cachedColors) return cachedColors;
+                var pal;
+                if (theme === "custom") pal = THEMES.custom || buildCustomTheme(customColor);
+                else pal = THEMES[theme] || THEMES.aurora;
+                if (satFilter) pal = pal.map(function(c) { return applySatFilter(c, satMin); });
+                cachedColors = pal;
+                return pal;
+            }
 
             function render() {
                 ctx.fillStyle = "rgba(0,0,0,0.15)";
