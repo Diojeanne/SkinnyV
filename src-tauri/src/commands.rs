@@ -2,7 +2,11 @@ use crate::audio::{AudioDeviceInfo, AudioEngine};
 use crate::AppState;
 use tauri::{Manager, WebviewWindowBuilder};
 
-/// List all available audio output devices (potential loopback sources).
+/// List all available audio capture sources.
+///
+/// On Windows these are output devices captured via WASAPI loopback; on
+/// Linux/other they are input devices, preferring PipeWire/PulseAudio monitor
+/// sources (which carry the system's playback).
 #[tauri::command]
 pub fn list_audio_devices() -> Vec<AudioDeviceInfo> {
     AudioEngine::list_devices()

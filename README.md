@@ -2,11 +2,11 @@
 
 Copyright (C) 2026 Clarissa Millarker
 
-SkinnyV is a lean, modern system audio visualizer with multi-monitor support. It captures system audio via WASAPI loopback and renders real-time visualizations across any or all connected displays, Built with Tauri 2 + Rust + plain HTML/JS/CSS.
+SkinnyV is a lean, modern system audio visualizer with multi-monitor support. It captures system audio (WASAPI loopback on Windows; PipeWire/PulseAudio monitor sources on Linux) and renders real-time visualizations across any or all connected displays. Built with Tauri 2 + Rust + plain HTML/JS/CSS.
 
 ## Features
 
-- **System audio capture** — WASAPI loopback on Windows, anything playing through your speakers
+- **System audio capture** — WASAPI loopback on Windows, PipeWire/PulseAudio monitor sources on Linux — anything playing through your speakers
 - **16 visualization modes** — Spectrum, Waveform, Circular, Particles, Radial Bars, Tunnel, Starburst, Wave Sea, Mirror, Matrix Rain, Terrain, Lattice, Bloom, Ribbon, Galaxy, Ripples
 - **12 color themes** — Aurora, Sunset, Electric, Fire, Mono, Forest, Candy, Cyber, Deep Sea, Gold, Vapor, Blood
 - **Auto-cycle themes** — optionally rotate through all themes every 8 seconds
@@ -20,10 +20,25 @@ SkinnyV is a lean, modern system audio visualizer with multi-monitor support. It
 
 ### Prerequisites
 
+Common:
+
 - **Rust** 1.70+ ([rustup](https://rustup.rs))
-- **Visual Studio C++ Build Tools** (Desktop development with C++ workload)
 - **Node.js** 18+ (only needed if you modify package.json)
+
+**Windows:**
+
+- **Visual Studio C++ Build Tools** (Desktop development with C++ workload)
 - **WebView2 runtime** — pre-installed on Windows 11
+
+**Linux** (Debian/Ubuntu package names; adjust for your distro):
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+  libjavascriptcoregtk-4.1-dev libpulse-dev librsvg2-dev patchelf
+```
+
+Capture uses the PulseAudio API, which works on both PulseAudio and PipeWire
+(via `pipewire-pulse`, standard on modern desktops).
 
 ### Dev mode
 
@@ -39,13 +54,14 @@ cargo tauri dev
 cargo tauri build
 ```
 
-Produces MSI and NSIS installers in `src-tauri/target/release/bundle/`.
+Produces MSI + NSIS installers on Windows, or `.deb` + AppImage on Linux, in
+`src-tauri/target/release/bundle/`.
 
 ## Architecture
 
 ```
 Rust Backend (src-tauri/src/)
-├── audio.rs    — cpal WASAPI loopback capture, FFT, auto-gain, beat detection
+├── audio.rs    — capture (cpal WASAPI loopback on Windows / libpulse monitor on Linux), FFT, auto-gain, beat detection
 ├── commands.rs — Tauri commands (device list, monitor mgmt, window control)
 └── lib.rs      — App setup, event wiring, clean shutdown
 
@@ -55,7 +71,7 @@ Frontend (index.html — single file, all inline)
 └── Visualizer — 16 canvas render modes, beat-reactive, theme-aware
 ```
 
-Audio data flows: WASAPI loopback → ring buffer → FFT (2048-sample Hann window) → 128 log-spaced bins with auto-gain normalization → Tauri event → Canvas render at 60fps.
+Audio data flows: system-audio capture (WASAPI loopback on Windows / PipeWire·PulseAudio monitor on Linux) → ring buffer → FFT (2048-sample Hann window) → 128 log-spaced bins with auto-gain normalization → Tauri event → Canvas render at 60fps.
 
 ## Usage
 

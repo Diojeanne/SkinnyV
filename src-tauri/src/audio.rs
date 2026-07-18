@@ -1,11 +1,10 @@
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{unbounded, Sender};
 use parking_lot::Mutex;
 
 const FFT_SIZE: usize = 2048;
 const NUM_BINS: usize = 128;
 
-/// Represents an audio device we can capture from.
+/// Represents an audio source we can capture from.
 #[derive(Clone, serde::Serialize)]
 pub struct AudioDeviceInfo {
     pub name: String,
@@ -31,7 +30,7 @@ enum AudioCommand {
     Stop,
 }
 
-/// AudioEngine is Send + Sync — it only owns channels, never the stream directly.
+/// AudioEngine is Send + Sync — it only owns channels, never a capture handle directly.
 pub struct AudioEngine {
     cmd_tx: Mutex<Option<Sender<AudioCommand>>>,
     running: Mutex<bool>,
@@ -48,25 +47,7 @@ impl AudioEngine {
     }
 
     pub fn list_devices() -> Vec<AudioDeviceInfo> {
-        let host = cpal::default_host();
-        let mut devices = Vec::new();
-
-        let default_name = host
-            .default_output_device()
-            .and_then(|d| d.name().ok());
-
-        if let Ok(output_devices) = host.output_devices() {
-            for device in output_devices {
-                let name = device.name().unwrap_or_else(|_| "Unknown".to_string());
-                let is_default = default_name.as_deref() == Some(&name);
-                devices.push(AudioDeviceInfo {
-                    name: name.clone(),
-                    id: name,
-                    is_default,
-                });
-            }
-        }
-        devices
+        backend::list_devices()
     }
 
     pub fn start(
@@ -93,8 +74,7 @@ impl AudioEngine {
             })
             .ok();
 
-        // Non-blocking: assume success. The audio thread will print errors to stderr.
-        // We set running=true optimistically; stop_capture checks cmd_tx anyway.
+        // Non-blocking: assume success. The audio thread reports errors to stderr.
         *self.running.lock() = true;
         Ok(())
     }
@@ -116,39 +96,71 @@ impl AudioEngine {
     }
 }
 
-/// Runs on a dedicated thread. Owns the cpal::Stream (which is !Send on some platforms).
+/// Runs on a dedicated thread. Owns the platform capture handle (which may be
+/// `!Send` on some platforms) and drives the Start/Stop command loop. Capture
+/// itself is delegated to the platform `backend`; the DSP/emit pipeline below is
+/// shared across every OS.
 fn audio_thread(
     cmd_rx: crossbeam_channel::Receiver<AudioCommand>,
     app_handle: tauri::AppHandle,
 ) {
-    use cpal::SampleFormat;
-    use realfft::RealFftPlanner;
-
     println!("[SkinnyV] Audio thread started");
 
-    let mut active_stream: Option<cpal::Stream> = None;
+    let sample_tx = spawn_dsp_worker(app_handle);
+    let mut active: Option<backend::CaptureHandle> = None;
 
-    let mut fft_planner = RealFftPlanner::<f32>::new();
-    let r2c = fft_planner.plan_fft_forward(FFT_SIZE);
-    let mut spectrum = r2c.make_output_vec();
-    let mut scratch = r2c.make_scratch_vec();
+    while let Ok(cmd) = cmd_rx.recv() {
+        match cmd {
+            AudioCommand::Start { device_id, result_tx } => {
+                println!("[SkinnyV] Starting capture, source: {:?}", device_id);
+                active.take(); // stop any previous capture
+                match backend::open_capture(device_id, sample_tx.clone()) {
+                    Ok(handle) => {
+                        println!("[SkinnyV] Capture started");
+                        active = Some(handle);
+                        let _ = result_tx.send(Ok(()));
+                    }
+                    Err(msg) => {
+                        println!("[SkinnyV] ERROR: {}", msg);
+                        let _ = result_tx.send(Err(msg));
+                    }
+                }
+            }
+            AudioCommand::Stop => {
+                println!("[SkinnyV] Stopping capture");
+                active.take();
+                break;
+            }
+        }
+    }
 
-    let window: Vec<f32> = (0..FFT_SIZE)
-        .map(|i| 0.5 - 0.5 * ((2.0 * std::f32::consts::PI * i as f32) / FFT_SIZE as f32).cos())
-        .collect();
+    println!("[SkinnyV] Audio thread exiting");
+}
 
-    let mut buffer: std::collections::VecDeque<f32> =
-        std::collections::VecDeque::with_capacity(FFT_SIZE);
-
-    let mut beat_history: std::collections::VecDeque<f32> =
-        std::collections::VecDeque::with_capacity(43);
-    let mut last_volume = 0.0f32;
+/// Spawns the FFT + emit worker. Consumes interleaved-stereo `f32` sample chunks
+/// on the returned channel and emits `audio-data` events to the frontend.
+/// Platform-neutral: both capture backends feed the same channel.
+fn spawn_dsp_worker(app_handle: tauri::AppHandle) -> Sender<Vec<f32>> {
+    use realfft::RealFftPlanner;
 
     let (sample_tx, sample_rx) = unbounded::<Vec<f32>>();
 
-    // Spawn FFT+emit worker
-    let emit_handle = app_handle.clone();
     std::thread::spawn(move || {
+        let mut fft_planner = RealFftPlanner::<f32>::new();
+        let r2c = fft_planner.plan_fft_forward(FFT_SIZE);
+        let mut spectrum = r2c.make_output_vec();
+        let mut scratch = r2c.make_scratch_vec();
+
+        let window: Vec<f32> = (0..FFT_SIZE)
+            .map(|i| 0.5 - 0.5 * ((2.0 * std::f32::consts::PI * i as f32) / FFT_SIZE as f32).cos())
+            .collect();
+
+        let mut buffer: std::collections::VecDeque<f32> =
+            std::collections::VecDeque::with_capacity(FFT_SIZE);
+        let mut beat_history: std::collections::VecDeque<f32> =
+            std::collections::VecDeque::with_capacity(43);
+        let mut last_volume = 0.0f32;
+
         loop {
             match sample_rx.recv() {
                 Ok(samples) => {
@@ -189,8 +201,7 @@ fn audio_thread(
                     if beat_history.len() > 43 {
                         beat_history.pop_front();
                     }
-                    let avg =
-                        beat_history.iter().sum::<f32>() / beat_history.len().max(1) as f32;
+                    let avg = beat_history.iter().sum::<f32>() / beat_history.len().max(1) as f32;
                     let beat =
                         volume > avg * 1.4 && volume > 0.01 && (volume - last_volume) > 0.005;
                     last_volume = volume;
@@ -198,147 +209,14 @@ fn audio_thread(
                     let data = FrequencyData { bins, volume, peak, beat };
 
                     use tauri::Emitter;
-                    let _ = emit_handle.emit("audio-data", &data);
+                    let _ = app_handle.emit("audio-data", &data);
                 }
                 Err(_) => break,
             }
         }
     });
 
-    // Process commands
-    while let Ok(cmd) = cmd_rx.recv() {
-        match cmd {
-            AudioCommand::Start { device_id, result_tx } => {
-                println!("[SkinnyV] Starting capture, device: {:?}", device_id);
-
-                // Drop old stream
-                active_stream.take();
-
-                let host = cpal::default_host();
-                let device = match &device_id {
-                    Some(id) => {
-                        println!("[SkinnyV] Looking for device: {}", id);
-                        match host.output_devices() {
-                            Ok(mut devs) => devs.find(|d| {
-                                d.name().map(|n| {
-                                    println!("[SkinnyV] Found device: {}", n);
-                                    n == *id
-                                }).unwrap_or(false)
-                            }),
-                            Err(e) => {
-                                let msg = format!("Failed to enumerate output devices: {}", e);
-                                println!("[SkinnyV] ERROR: {}", msg);
-                                let _ = result_tx.send(Err(msg));
-                                continue;
-                            }
-                        }
-                    }
-                    None => {
-                        println!("[SkinnyV] Using default output device");
-                        host.default_output_device()
-                    }
-                };
-
-                let device = match device {
-                    Some(d) => d,
-                    None => {
-                        let msg = "No output device found".to_string();
-                        println!("[SkinnyV] ERROR: {}", msg);
-                        let _ = result_tx.send(Err(msg));
-                        continue;
-                    }
-                };
-
-                let supported = match device.default_output_config() {
-                    Ok(c) => {
-                        println!("[SkinnyV] Device config: {:?}, sample format: {:?}", c.channels(), c.sample_format());
-                        c
-                    }
-                    Err(e) => {
-                        let msg = format!("Failed to get output config: {}", e);
-                        println!("[SkinnyV] ERROR: {}", msg);
-                        let _ = result_tx.send(Err(msg));
-                        continue;
-                    }
-                };
-
-                let sample_format = supported.sample_format();
-                let config: cpal::StreamConfig = supported.into();
-
-                println!("[SkinnyV] Building input stream (loopback) with format {:?}", sample_format);
-
-                let tx = sample_tx.clone();
-                let stream = match sample_format {
-                    SampleFormat::F32 => device.build_input_stream(
-                        &config,
-                        move |data: &[f32], _: &_| { let _ = tx.send(data.to_vec()); },
-                        |err| eprintln!("[SkinnyV] Stream error: {}", err),
-                        None,
-                    ),
-                    SampleFormat::I16 => {
-                        let tx = sample_tx.clone();
-                        device.build_input_stream(
-                            &config,
-                            move |data: &[i16], _: &_| {
-                                let converted: Vec<f32> = data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
-                                let _ = tx.send(converted);
-                            },
-                            |err| eprintln!("[SkinnyV] Stream error: {}", err),
-                            None,
-                        )
-                    }
-                    SampleFormat::U16 => {
-                        let tx = sample_tx.clone();
-                        device.build_input_stream(
-                            &config,
-                            move |data: &[u16], _: &_| {
-                                let converted: Vec<f32> = data.iter().map(|&s| (s as f32 - 32768.0) / 32768.0).collect();
-                                let _ = tx.send(converted);
-                            },
-                            |err| eprintln!("[SkinnyV] Stream error: {}", err),
-                            None,
-                        )
-                    }
-                    fmt => {
-                        let msg = format!("Unsupported sample format: {:?}", fmt);
-                        println!("[SkinnyV] ERROR: {}", msg);
-                        let _ = result_tx.send(Err(msg));
-                        continue;
-                    }
-                };
-
-                match stream {
-                    Ok(s) => {
-                        println!("[SkinnyV] Stream built successfully, playing...");
-                        match s.play() {
-                            Ok(_) => {
-                                println!("[SkinnyV] Stream playing!");
-                                active_stream = Some(s);
-                                let _ = result_tx.send(Ok(()));
-                            }
-                            Err(e) => {
-                                let msg = format!("Failed to play stream: {}", e);
-                                println!("[SkinnyV] ERROR: {}", msg);
-                                let _ = result_tx.send(Err(msg));
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        let msg = format!("Failed to build input stream: {}", e);
-                        println!("[SkinnyV] ERROR: {}", msg);
-                        let _ = result_tx.send(Err(msg));
-                    }
-                }
-            }
-            AudioCommand::Stop => {
-                println!("[SkinnyV] Stopping capture");
-                active_stream.take();
-                break;
-            }
-        }
-    }
-
-    println!("[SkinnyV] Audio thread exiting");
+    sample_tx
 }
 
 /// Auto-gain state — rolling peak that decays slowly
@@ -388,13 +266,12 @@ fn compute_bins(
         }
 
         let avg = if count > 0 { sum / count as f32 } else { 0.0 };
-        if avg > frame_max { frame_max = avg; }
+        if avg > frame_max {
+            frame_max = avg;
+        }
         bins.push(avg);
     }
 
-    // Auto-gain with decaying rolling peak:
-    // - If this frame's peak is higher than the rolling peak, jump up immediately
-    // - Otherwise decay the rolling peak slowly (0.98 per frame ≈ 2-3 second decay at 60fps)
     let mut peak = load_peak();
     if frame_max > peak {
         peak = frame_max;
@@ -404,10 +281,333 @@ fn compute_bins(
     peak = peak.max(0.5);
     store_peak(peak);
 
-    // Normalize bins against the rolling peak
     for b in bins.iter_mut() {
         *b = (*b / peak).min(1.0);
     }
 
     bins
+}
+
+// ===========================================================================
+// Platform capture backends. Each exposes:
+//   pub struct CaptureHandle;                         // stops capture on drop
+//   pub fn list_devices() -> Vec<AudioDeviceInfo>;
+//   pub fn open_capture(id, tx) -> Result<CaptureHandle, String>;
+// and pushes interleaved-stereo f32 sample chunks into `tx`.
+// ===========================================================================
+
+/// Windows: WASAPI loopback — open an INPUT stream on an OUTPUT device.
+#[cfg(target_os = "windows")]
+mod backend {
+    use super::AudioDeviceInfo;
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    use crossbeam_channel::Sender;
+
+    pub struct CaptureHandle {
+        _stream: cpal::Stream,
+    }
+
+    pub fn list_devices() -> Vec<AudioDeviceInfo> {
+        let host = cpal::default_host();
+        let mut devices = Vec::new();
+
+        let default_name = host.default_output_device().and_then(|d| d.name().ok());
+
+        if let Ok(output_devices) = host.output_devices() {
+            for device in output_devices {
+                let name = device.name().unwrap_or_else(|_| "Unknown".to_string());
+                let is_default = default_name.as_deref() == Some(&name);
+                devices.push(AudioDeviceInfo {
+                    name: name.clone(),
+                    id: name,
+                    is_default,
+                });
+            }
+        }
+        devices
+    }
+
+    pub fn open_capture(
+        device_id: Option<String>,
+        tx: Sender<Vec<f32>>,
+    ) -> Result<CaptureHandle, String> {
+        use cpal::SampleFormat;
+
+        let host = cpal::default_host();
+        let device = match &device_id {
+            Some(id) => host
+                .output_devices()
+                .map_err(|e| format!("Failed to enumerate output devices: {}", e))?
+                .find(|d| d.name().map(|n| n == *id).unwrap_or(false)),
+            None => host.default_output_device(),
+        };
+        let device = device.ok_or_else(|| "No output device found".to_string())?;
+
+        let supported = device
+            .default_output_config()
+            .map_err(|e| format!("Failed to get output config: {}", e))?;
+        let sample_format = supported.sample_format();
+        let config: cpal::StreamConfig = supported.into();
+
+        let err_fn = |err| eprintln!("[SkinnyV] Stream error: {}", err);
+        let stream = match sample_format {
+            SampleFormat::F32 => {
+                let tx = tx.clone();
+                device.build_input_stream(
+                    &config,
+                    move |data: &[f32], _: &_| {
+                        let _ = tx.send(data.to_vec());
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            SampleFormat::I16 => {
+                let tx = tx.clone();
+                device.build_input_stream(
+                    &config,
+                    move |data: &[i16], _: &_| {
+                        let converted: Vec<f32> =
+                            data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
+                        let _ = tx.send(converted);
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            SampleFormat::U16 => {
+                let tx = tx.clone();
+                device.build_input_stream(
+                    &config,
+                    move |data: &[u16], _: &_| {
+                        let converted: Vec<f32> =
+                            data.iter().map(|&s| (s as f32 - 32768.0) / 32768.0).collect();
+                        let _ = tx.send(converted);
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            fmt => return Err(format!("Unsupported sample format: {:?}", fmt)),
+        };
+
+        let stream = stream.map_err(|e| format!("Failed to build input stream: {}", e))?;
+        stream.play().map_err(|e| format!("Failed to play stream: {}", e))?;
+        Ok(CaptureHandle { _stream: stream })
+    }
+}
+
+/// Linux/other: capture from a PulseAudio/PipeWire monitor source.
+#[cfg(not(target_os = "windows"))]
+mod backend {
+    use super::AudioDeviceInfo;
+    use crossbeam_channel::Sender;
+    use libpulse_binding as pulse;
+    use libpulse_simple_binding::Simple;
+    use pulse::callbacks::ListResult;
+    use pulse::context::{Context, FlagSet as CtxFlags, State as CtxState};
+    use pulse::mainloop::standard::{IterateResult, Mainloop};
+    use pulse::operation::State as OpState;
+    use pulse::sample::{Format, Spec};
+    use pulse::stream::Direction;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::thread::JoinHandle;
+
+    pub struct CaptureHandle {
+        stop: Arc<AtomicBool>,
+        join: Option<JoinHandle<()>>,
+    }
+
+    impl Drop for CaptureHandle {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+            if let Some(handle) = self.join.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    struct SourceInfo {
+        name: String,
+        description: String,
+        is_monitor: bool,
+    }
+
+    /// Connect to the pulse/pipewire server, run `f` against a ready context.
+    fn with_context<T>(f: impl FnOnce(&mut Mainloop, &Context) -> Result<T, String>) -> Result<T, String> {
+        let mut mainloop = Mainloop::new().ok_or("failed to create pulse mainloop")?;
+        let mut context =
+            Context::new(&mainloop, "SkinnyV").ok_or("failed to create pulse context")?;
+        context
+            .connect(None, CtxFlags::NOFLAGS, None)
+            .map_err(|e| format!("pulse connect failed: {}", e))?;
+
+        loop {
+            match mainloop.iterate(true) {
+                IterateResult::Success(_) => {}
+                IterateResult::Err(e) => return Err(format!("pulse mainloop error: {}", e)),
+                IterateResult::Quit(_) => return Err("pulse mainloop quit".into()),
+            }
+            match context.get_state() {
+                CtxState::Ready => break,
+                CtxState::Failed | CtxState::Terminated => {
+                    return Err("pulse context failed".into())
+                }
+                _ => {}
+            }
+        }
+        f(&mut mainloop, &context)
+    }
+
+    fn default_sink_name(mainloop: &mut Mainloop, context: &Context) -> Option<String> {
+        let out = Rc::new(RefCell::new(None::<String>));
+        let sink = out.clone();
+        let op = context.introspect().get_server_info(move |info| {
+            *sink.borrow_mut() = info.default_sink_name.as_ref().map(|s| s.to_string());
+        });
+        while op.get_state() == OpState::Running {
+            if let IterateResult::Err(_) | IterateResult::Quit(_) = mainloop.iterate(true) {
+                break;
+            }
+        }
+        // Bind first so the borrow's temporary drops before `out`/`op` at block end.
+        let name = out.borrow().clone();
+        name
+    }
+
+    fn collect_sources(mainloop: &mut Mainloop, context: &Context) -> Vec<SourceInfo> {
+        let out = Rc::new(RefCell::new(Vec::<SourceInfo>::new()));
+        let sink = out.clone();
+        let op = context.introspect().get_source_info_list(move |res| {
+            if let ListResult::Item(item) = res {
+                sink.borrow_mut().push(SourceInfo {
+                    name: item.name.as_ref().map(|s| s.to_string()).unwrap_or_default(),
+                    description: item
+                        .description
+                        .as_ref()
+                        .map(|s| s.to_string())
+                        .unwrap_or_default(),
+                    is_monitor: item.monitor_of_sink.is_some(),
+                });
+            }
+        });
+        while op.get_state() == OpState::Running {
+            if let IterateResult::Err(_) | IterateResult::Quit(_) = mainloop.iterate(true) {
+                break;
+            }
+        }
+        // `op` still holds a clone of the callback (and thus of `out`), so move
+        // the collected vec out rather than trying to unwrap the Rc. Bind first so
+        // the borrow's temporary drops before `out`/`op` at block end.
+        let collected = std::mem::take(&mut *out.borrow_mut());
+        collected
+    }
+
+    pub fn list_devices() -> Vec<AudioDeviceInfo> {
+        with_context(|mainloop, context| {
+            let default_monitor =
+                default_sink_name(mainloop, context).map(|s| format!("{}.monitor", s));
+
+            // Offer system-audio sources only — i.e. monitor sources — mirroring the
+            // Windows backend, which lists output devices rather than inputs. Mics
+            // are deliberately excluded, so capture can never silently fall back to
+            // one. If no monitor exists the list is empty: the UI shows "no devices"
+            // and an explicit start attempt errors rather than grabbing an input.
+            let monitors: Vec<_> = collect_sources(mainloop, context)
+                .into_iter()
+                .filter(|s| s.is_monitor)
+                .collect();
+
+            // Default to the active sink's monitor, else the first available monitor.
+            let default_id = default_monitor
+                .filter(|m| monitors.iter().any(|s| &s.name == m))
+                .or_else(|| monitors.first().map(|s| s.name.clone()));
+
+            let devices = monitors
+                .into_iter()
+                .map(|s| {
+                    let is_default = Some(&s.name) == default_id.as_ref();
+                    let label = if s.description.is_empty() {
+                        s.name.clone()
+                    } else {
+                        s.description.clone()
+                    };
+                    AudioDeviceInfo { name: label, id: s.name, is_default }
+                })
+                .collect();
+            Ok(devices)
+        })
+        .unwrap_or_default()
+    }
+
+    fn resolve_target(device_id: Option<String>) -> Result<String, String> {
+        if let Some(id) = device_id {
+            return Ok(id);
+        }
+        with_context(|mainloop, context| {
+            if let Some(sink) = default_sink_name(mainloop, context) {
+                let monitor = format!("{}.monitor", sink);
+                // prefer the explicit monitor if the server lists it
+                let sources = collect_sources(mainloop, context);
+                if sources.iter().any(|s| s.name == monitor) {
+                    return Ok(monitor);
+                }
+            }
+            // otherwise: first monitor source we can find
+            collect_sources(mainloop, context)
+                .into_iter()
+                .find(|s| s.is_monitor)
+                .map(|s| s.name)
+                .ok_or_else(|| "no monitor source found".to_string())
+        })
+    }
+
+    pub fn open_capture(
+        device_id: Option<String>,
+        tx: Sender<Vec<f32>>,
+    ) -> Result<CaptureHandle, String> {
+        let target = resolve_target(device_id)?;
+        println!("[SkinnyV] Capturing from source: {}", target);
+
+        let spec = Spec { format: Format::F32le, channels: 2, rate: 48000 };
+        if !spec.is_valid() {
+            return Err("invalid pulse sample spec".into());
+        }
+
+        let simple = Simple::new(
+            None,
+            "SkinnyV",
+            Direction::Record,
+            Some(&target),
+            "system audio",
+            &spec,
+            None,
+            None,
+        )
+        .map_err(|e| format!("failed to open capture stream: {}", e))?;
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_thread = stop.clone();
+        let join = std::thread::spawn(move || {
+            // 1024 stereo f32 frames per read (~21ms at 48kHz).
+            let mut bytes = [0u8; 1024 * 2 * 4];
+            while !stop_thread.load(Ordering::Relaxed) {
+                if simple.read(&mut bytes).is_err() {
+                    break;
+                }
+                let samples: Vec<f32> = bytes
+                    .chunks_exact(4)
+                    .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                    .collect();
+                if tx.send(samples).is_err() {
+                    break;
+                }
+            }
+        });
+
+        Ok(CaptureHandle { stop, join: Some(join) })
+    }
 }
