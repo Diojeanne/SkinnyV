@@ -1,6 +1,6 @@
 {
   "name": "skinnyv",
-  "version": "0.1.0",
+  "version": "1.1.0",
   "description": "Lean system audio visualizer",
   "scripts": {
     "dev": "echo 'no dev server needed'",

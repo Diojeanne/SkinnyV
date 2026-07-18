@@ -43,7 +43,7 @@ Capture uses the PulseAudio API, which works on both PulseAudio and PipeWire
 ### Dev mode
 
 ```bash
-git clone https://github.com/Diojeanne/SkinnyV.git
+git clone https://github.com/SkinnyV-Release-Team/SkinnyV.git
 cd SkinnyV
 cargo tauri dev
 ```
