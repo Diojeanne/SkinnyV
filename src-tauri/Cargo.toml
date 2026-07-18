@@ -17,11 +17,19 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-cpal = "0.15"
 rustfft = "6.2"
 realfft = "3.4"
 parking_lot = "0.12"
 crossbeam-channel = "0.5"
+
+# Windows captures system audio via WASAPI loopback (input stream on an output device).
+[target.'cfg(windows)'.dependencies]
+cpal = "0.15"
+
+# Linux/other capture from a PulseAudio/PipeWire monitor source.
+[target.'cfg(not(windows))'.dependencies]
+libpulse-binding = "2"
+libpulse-simple-binding = "2"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
