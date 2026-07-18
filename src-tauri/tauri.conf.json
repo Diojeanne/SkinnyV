@@ -34,7 +34,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "category": "AudioVideo",
     "shortDescription": "Lean system audio visualizer",
     "longDescription": "SkinnyV is a lightweight audio visualizer that captures system audio and renders modern visualizations across multiple monitors."
   },
