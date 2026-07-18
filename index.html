@@ -63,6 +63,13 @@
         .hex-input { flex: 1; font-family: monospace; text-transform: uppercase; margin-bottom: 0; }
         .theme-swatch.custom { border-style: dashed; border-color: #6b6b80; }
         .hint { font-size: 11px; color: #6b6b80; margin-top: 6px; }
+        .dual-range { position: relative; height: 36px; margin: 8px 0 4px; }
+        .dual-range-track { position: absolute; top: 14px; left: 0; right: 0; height: 6px; background: #2a2a3a; border-radius: 3px; }
+        .dual-range-fill { position: absolute; top: 14px; height: 6px; background: #9b5de5; border-radius: 3px; }
+        .dual-range input[type="range"] { position: absolute; top: 6px; left: 0; width: 100%; margin: 0; height: 24px; pointer-events: none; -webkit-appearance: none; background: transparent; }
+        .dual-range input[type="range"]::-webkit-slider-thumb { pointer-events: auto; -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #e4e4ef; border: 2px solid #9b5de5; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.4); }
+        .dual-range input[type="range"]::-moz-range-thumb { pointer-events: auto; width: 18px; height: 18px; border-radius: 50%; background: #e4e4ef; border: 2px solid #9b5de5; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.4); }
+        .dual-range-labels { display: flex; justify-content: space-between; font-size: 11px; color: #6b6b80; }
         .panel-footer { text-align: center; font-size: 11px; color: #6b6b80; padding-top: 8px; border-top: 1px solid #2a2a3a; margin-top: auto; }
 
         /* Visualizer */
@@ -140,6 +147,19 @@
                     <input type="text" id="custom-color-hex" class="select hex-input" value="#9B5DE5" maxlength="7" placeholder="#RRGGBB">
                 </div>
                 <div class="hint">Pick a color or enter hex — a 4-shade theme is generated automatically.</div>
+                <div style="margin-top:10px">
+                    <div class="hint" style="margin-top:0;margin-bottom:2px">Shade range (how far shades deviate from base color)</div>
+                    <div class="dual-range" id="custom-range-slider">
+                        <div class="dual-range-track"></div>
+                        <div class="dual-range-fill" id="custom-range-fill"></div>
+                        <input type="range" id="custom-range-low" min="0" max="100" value="100">
+                        <input type="range" id="custom-range-high" min="0" max="100" value="100">
+                    </div>
+                    <div class="dual-range-labels">
+                        <span>Darker <span id="custom-range-low-val">100%</span></span>
+                        <span>Lighter <span id="custom-range-high-val">100%</span></span>
+                    </div>
+                </div>
             </div>
         </div>
         <div class="panel-section">
@@ -403,6 +423,44 @@
                     customSwatch.style.background = customColor;
                     if (emit) emit("settings-change", { key: "customColor", value: customColor });
                 }
+            };
+
+            // Custom theme shade range slider (dual-handle)
+            var rangeLow = document.getElementById("custom-range-low");
+            var rangeHigh = document.getElementById("custom-range-high");
+            var rangeFill = document.getElementById("custom-range-fill");
+            var rangeLowVal = document.getElementById("custom-range-low-val");
+            var rangeHighVal = document.getElementById("custom-range-high-val");
+
+            rangeLow.value = parseInt(localStorage.getItem("skinnyv-range-low")) || 100;
+            rangeHigh.value = parseInt(localStorage.getItem("skinnyv-range-high")) || 100;
+
+            function updateRangeFill() {
+                var lo = parseInt(rangeLow.value), hi = parseInt(rangeHigh.value);
+                // Fill bar goes from lo% to hi% of track width
+                rangeFill.style.left = lo + "%";
+                rangeFill.style.width = (hi - lo) + "%";
+                rangeLowVal.textContent = lo + "%";
+                rangeHighVal.textContent = hi + "%";
+            }
+            updateRangeFill();
+
+            function emitRange() {
+                var lo = parseInt(rangeLow.value), hi = parseInt(rangeHigh.value);
+                localStorage.setItem("skinnyv-range-low", String(lo));
+                localStorage.setItem("skinnyv-range-high", String(hi));
+                if (emit) emit("settings-change", { key: "customRange", value: { low: lo, high: hi } });
+            }
+
+            rangeLow.oninput = function() {
+                if (parseInt(rangeLow.value) > parseInt(rangeHigh.value)) rangeLow.value = rangeHigh.value;
+                updateRangeFill();
+                emitRange();
+            };
+            rangeHigh.oninput = function() {
+                if (parseInt(rangeHigh.value) < parseInt(rangeLow.value)) rangeHigh.value = rangeLow.value;
+                updateRangeFill();
+                emitRange();
             };
 
             // Saturation filter
@@ -1133,18 +1191,23 @@
                 return hslToHex(hsl.h, hsl.s, hsl.l);
             }
 
-            function buildCustomTheme(hex) {
+            function buildCustomTheme(hex, rangeLow, rangeHigh) {
                 var hsl = hexToHsl(hex);
+                var lo = (rangeLow !== undefined ? rangeLow : 100) / 100;
+                var hi = (rangeHigh !== undefined ? rangeHigh : 100) / 100;
+                var spread = Math.max(lo, hi);
                 return [
                     hex,
-                    hslToHex(hsl.h, hsl.s, Math.min(85, hsl.l + 18)),
-                    hslToHex(hsl.h, hsl.s, Math.max(20, hsl.l - 18)),
-                    hslToHex((hsl.h + 25) % 360, Math.max(40, hsl.s - 10), Math.min(75, hsl.l + 8))
+                    hslToHex(hsl.h, hsl.s, Math.min(85, hsl.l + 18 * hi)),
+                    hslToHex(hsl.h, hsl.s, Math.max(20, hsl.l - 18 * lo)),
+                    hslToHex((hsl.h + 25 * spread) % 360, Math.max(40, hsl.s - 10 * spread), Math.min(75, hsl.l + 8 * hi))
                 ];
             }
 
             var customColor = localStorage.getItem("skinnyv-custom-color") || "#9b5de5";
-            THEMES.custom = buildCustomTheme(customColor);
+            var customRangeLow = parseInt(localStorage.getItem("skinnyv-range-low")) || 100;
+            var customRangeHigh = parseInt(localStorage.getItem("skinnyv-range-high")) || 100;
+            THEMES.custom = buildCustomTheme(customColor, customRangeLow, customRangeHigh);
 
             var satFilter = localStorage.getItem("skinnyv-sat-filter") === "true";
             var satMin = parseInt(localStorage.getItem("skinnyv-sat-min")) || 80;
@@ -1187,7 +1250,15 @@
                     if (p.key === "customColor") {
                         customColor = p.value;
                         localStorage.setItem("skinnyv-custom-color", customColor);
-                        THEMES.custom = buildCustomTheme(customColor);
+                        THEMES.custom = buildCustomTheme(customColor, customRangeLow, customRangeHigh);
+                        invalidateColors();
+                    }
+                    if (p.key === "customRange") {
+                        customRangeLow = p.value.low;
+                        customRangeHigh = p.value.high;
+                        localStorage.setItem("skinnyv-range-low", String(customRangeLow));
+                        localStorage.setItem("skinnyv-range-high", String(customRangeHigh));
+                        THEMES.custom = buildCustomTheme(customColor, customRangeLow, customRangeHigh);
                         invalidateColors();
                     }
                     if (p.key === "satFilter") { satFilter = p.value; invalidateColors(); }
