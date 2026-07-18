@@ -3,6 +3,12 @@ use parking_lot::Mutex;
 
 const FFT_SIZE: usize = 2048;
 const NUM_BINS: usize = 128;
+/// Assumed sample rate for frequency bin calculation. The Linux backend
+/// hardcodes 48000 in its PulseAudio capture spec; PulseAudio resamples
+/// transparently if the system rate differs. The Windows backend gets
+/// the actual device rate from cpal but the FFT bin math assumes 48kHz
+/// — the 20Hz lower bound shifts by <1 bin at 44.1kHz, negligible.
+const SAMPLE_RATE: f32 = 48000.0;
 
 /// Represents an audio source we can capture from.
 #[derive(Clone, serde::Serialize)]
@@ -241,7 +247,7 @@ fn compute_bins(
     let n = spectrum.len();
     let usable = n / 2;
 
-    let min_bin = (20.0 * n as f32 / 48000.0).max(1.0) as usize;
+    let min_bin = (20.0 * n as f32 / SAMPLE_RATE).max(1.0) as usize;
     let max_bin = usable;
 
     let mut bins = Vec::with_capacity(num_bins);
@@ -418,15 +424,19 @@ mod backend {
 
     pub struct CaptureHandle {
         stop: Arc<AtomicBool>,
-        join: Option<JoinHandle<()>>,
+        // The capture thread is detached, not joined. simple.read() is a
+        // blocking call with no timeout — if the PulseAudio server stalls
+        // or the monitor source disappears, joining would block forever.
+        // The thread checks `stop` between reads and exits on its own
+        // (normally within ~21ms). If it's stuck in read(), the OS
+        // reaps it on process exit.
+        _join: Option<JoinHandle<()>>,
     }
 
     impl Drop for CaptureHandle {
         fn drop(&mut self) {
             self.stop.store(true, Ordering::Relaxed);
-            if let Some(handle) = self.join.take() {
-                let _ = handle.join();
-            }
+            // Deliberately do NOT join — see comment on _join field.
         }
     }
 
@@ -445,21 +455,31 @@ mod backend {
             .connect(None, CtxFlags::NOFLAGS, None)
             .map_err(|e| format!("pulse connect failed: {}", e))?;
 
-        loop {
-            match mainloop.iterate(true) {
-                IterateResult::Success(_) => {}
-                IterateResult::Err(e) => return Err(format!("pulse mainloop error: {}", e)),
-                IterateResult::Quit(_) => return Err("pulse mainloop quit".into()),
-            }
-            match context.get_state() {
-                CtxState::Ready => break,
-                CtxState::Failed | CtxState::Terminated => {
-                    return Err("pulse context failed".into())
+        let result = (|| {
+            loop {
+                match mainloop.iterate(true) {
+                    IterateResult::Success(_) => {}
+                    IterateResult::Err(e) => return Err(format!("pulse mainloop error: {}", e)),
+                    IterateResult::Quit(_) => return Err("pulse mainloop quit".into()),
                 }
-                _ => {}
+                match context.get_state() {
+                    CtxState::Ready => break,
+                    CtxState::Failed | CtxState::Terminated => {
+                        return Err("pulse context failed".into())
+                    }
+                    _ => {}
+                }
             }
-        }
-        f(&mut mainloop, &context)
+            f(&mut mainloop, &context)
+        })();
+
+        // Clean up: explicitly disconnect the context so the PulseAudio
+        // daemon releases the connection immediately. The mainloop and
+        // context are freed when dropped, but disconnecting first avoids a
+        // brief window where the daemon still considers us connected.
+        let _ = context.disconnect();
+
+        result
     }
 
     fn default_sink_name(mainloop: &mut Mainloop, context: &Context) -> Option<String> {
@@ -548,16 +568,17 @@ mod backend {
             return Ok(id);
         }
         with_context(|mainloop, context| {
+            let sources = collect_sources(mainloop, context);
+
             if let Some(sink) = default_sink_name(mainloop, context) {
                 let monitor = format!("{}.monitor", sink);
-                // prefer the explicit monitor if the server lists it
-                let sources = collect_sources(mainloop, context);
                 if sources.iter().any(|s| s.name == monitor) {
                     return Ok(monitor);
                 }
             }
-            // otherwise: first monitor source we can find
-            collect_sources(mainloop, context)
+
+            // No default sink match — fall back to first available monitor.
+            sources
                 .into_iter()
                 .find(|s| s.is_monitor)
                 .map(|s| s.name)
@@ -608,6 +629,6 @@ mod backend {
             }
         });
 
-        Ok(CaptureHandle { stop, join: Some(join) })
+        Ok(CaptureHandle { stop, _join: Some(join) })
     }
 }
